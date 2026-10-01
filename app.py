@@ -169,7 +169,7 @@ class ConnectionManager:
                     database=db_path,
                     user=username,
                     password=password,
-                    charset="WIN1252",
+                    charset="NONE",
                     auth_plugin_name=plugin,
                     wire_crypt=wire_crypt,
                     timeout=10,
@@ -219,15 +219,16 @@ def json_safe(obj):
     if isinstance(obj, (datetime, date)):
         return obj.isoformat()
     if isinstance(obj, bytes):
-        # Try to decode as text first (BLOB sub_type text), fall back to hex
-        try:
-            return obj.decode("win1252")
-        except Exception:
-            h = obj.hex()
-            return h[:200] + ("…" if len(h) > 200 else "")
+        # With charset NONE, text comes back as raw bytes.
+        # Try WIN1252 first (most likely for InterBase), then Latin-1, then UTF-8.
+        for enc in ("win1252", "latin-1", "utf-8"):
+            try:
+                return obj.decode(enc)
+            except (UnicodeDecodeError, ValueError):
+                continue
+        # Last resort: decode with replacement
+        return obj.decode("utf-8", errors="replace")
     if isinstance(obj, str):
-        # Ensure the string is valid UTF-8 for JSON serialization
-        # (WIN1252 chars like smart quotes may cause issues)
         try:
             obj.encode("utf-8")
             return obj
@@ -243,16 +244,13 @@ def json_safe(obj):
 def fast_row_to_json(row):
     """Convert a single database row to a JSON-safe list.
 
-    This is a non-recursive fast path used for query results, avoiding
-    the overhead of the generic json_safe() which walks types recursively.
+    Non-recursive fast path for query results.
     """
     out = []
     for v in row:
         if v is None:
             out.append(None)
         elif isinstance(v, str):
-            # Fast path for pure ASCII (most common case)
-            # Only do encode check if non-ASCII chars present
             if v.isascii():
                 out.append(v)
             else:
@@ -261,16 +259,20 @@ def fast_row_to_json(row):
                     out.append(v)
                 except UnicodeEncodeError:
                     out.append(v.encode("utf-8", errors="replace").decode("utf-8"))
+        elif isinstance(v, bytes):
+            # With charset NONE, text columns come back as raw bytes
+            for enc in ("win1252", "latin-1", "utf-8"):
+                try:
+                    out.append(v.decode(enc))
+                    break
+                except (UnicodeDecodeError, ValueError):
+                    continue
+            else:
+                out.append(v.decode("utf-8", errors="replace"))
         elif isinstance(v, Decimal):
             out.append(float(v))
         elif isinstance(v, (datetime, date)):
             out.append(v.isoformat())
-        elif isinstance(v, bytes):
-            try:
-                out.append(v.decode("win1252"))
-            except Exception:
-                h = v.hex()
-                out.append(h[:200] + ("…" if len(h) > 200 else ""))
         elif isinstance(v, (int, float, bool)):
             out.append(v)
         else:
@@ -540,7 +542,7 @@ def api_diagnose_connection():
                 database=db_path,
                 user=username,
                 password=password,
-                charset="UTF8",
+                charset="NONE",
                 auth_plugin_name=plugin,
                 wire_crypt=wire_crypt,
                 timeout=10,
@@ -589,7 +591,7 @@ def api_diagnose_connection():
                     database=db_path,
                     user=username,
                     password=password,
-                    charset="WIN1252",
+                    charset="NONE",
                     auth_plugin_name=plugin,
                     wire_crypt=False,
                     timeout=10,
