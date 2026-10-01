@@ -433,6 +433,18 @@ body {
 .server-config-row .scr-port { flex: 1; max-width: 80px; }
 .server-config-row .scr-del { flex: 0; }
 
+.server-config-auth {
+    display: flex; gap: 16px; margin-bottom: 8px; padding: 0 10px;
+}
+.server-config-auth .auth-label {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 12px; color: var(--text-dim);
+}
+.server-config-auth .auth-label select {
+    background: var(--bg-elev); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 4px 8px; font-size: 12px;
+}
+
 .server-config-dbs { margin-left: 20px; }
 .scr-db-row { display: flex; gap: 8px; margin-bottom: 4px; }
 .scr-db-row input { flex: 1; }

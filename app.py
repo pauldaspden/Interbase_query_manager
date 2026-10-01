@@ -87,15 +87,49 @@ class ConnectionManager:
         port = server.get("port", 3050)
         # InterBase files use host/port; we pass host:path as the dsn
         dsn = f"{host}/{port}:{db_path}"
-        conn = firebirdsql.connect(
-            dsn=dsn,
-            user=username,
-            password=password,
-            charset="UTF8",
+
+        # InterBase 2020+ uses SRP-256 auth + wire encryption.
+        # firebirdsql defaults to Srp256 with wire_crypt=True, which is correct.
+        # We also try fallbacks for older servers that might not support SRP-256.
+        auth_plugin = server.get("auth_plugin")      # None = auto-detect
+        wire_crypt  = server.get("wire_crypt", True)  # default on
+        last_err = None
+
+        # If a specific auth plugin is configured, try only that one.
+        # Otherwise try Srp256 → Srp → Legacy_Auth in order.
+        if auth_plugin:
+            auth_chain = [auth_plugin]
+        else:
+            auth_chain = ["Srp256", "Srp", "Legacy_Auth"]
+
+        for plugin in auth_chain:
+            try:
+                conn = firebirdsql.connect(
+                    dsn=dsn,
+                    user=username,
+                    password=password,
+                    charset="UTF8",
+                    auth_plugin_name=plugin,
+                    wire_crypt=wire_crypt,
+                )
+                with self._lock:
+                    self._conns[key] = conn
+                return conn
+            except Exception as e:
+                last_err = e
+                # If this is Legacy_Auth, passlib might be needed
+                if plugin == "Legacy_Auth" and "passlib" in str(e):
+                    last_err = RuntimeError(
+                        "Legacy_Auth requires 'passlib' package. "
+                        "Install with: pip install passlib"
+                    )
+                continue
+
+        # All auth methods failed
+        raise ConnectionError(
+            f"Could not connect to {host}:{port} — tried {', '.join(auth_chain)}. "
+            f"Last error: {last_err}"
         )
-        with self._lock:
-            self._conns[key] = conn
-        return conn
 
     def close_all(self):
         with self._lock:
@@ -255,12 +289,24 @@ def api_test_connection():
     try:
         conn = cm.get(server_id, db_path, username, password)
         cur = conn.cursor()
-        cur.execute("SELECT version FROM RDB$DATABASE") if False else None
-        # InterBase doesn't have a version column; just fetch 1
         cur.execute("SELECT 1 FROM RDB$DATABASE")
         row = cur.fetchone()
         cur.close()
-        return jsonify({"ok": True, "message": "Connection successful"})
+        # Report which auth plugin actually succeeded
+        auth_used = getattr(conn, "auth_plugin_name", "unknown")
+        accept_plugin = getattr(conn, "accept_plugin_name", b"")
+        if isinstance(accept_plugin, bytes):
+            accept_plugin = accept_plugin.decode("utf-8", errors="replace")
+        wire_crypt = getattr(conn, "wire_crypt", None)
+        protocol = getattr(conn, "accept_version", None)
+        return jsonify({
+            "ok": True,
+            "message": "Connection successful",
+            "auth_requested": auth_used,
+            "auth_accepted": accept_plugin or auth_used,
+            "wire_crypt": wire_crypt,
+            "protocol_version": protocol,
+        })
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 200
 

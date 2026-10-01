@@ -578,22 +578,40 @@ async function openSettings() {
 
     const div = document.getElementById('serversConfig');
     div.innerHTML = c.servers.map((s, i) => `
-        <div class="server-config-row" data-idx="${i}">
-            <input class="scr-name modal-input" placeholder="Name" value="${esc(s.name)}">
-            <input class="scr-host modal-input" placeholder="Host" value="${esc(s.host)}">
-            <input class="scr-port modal-input" placeholder="Port" value="${s.port || 3050}" style="max-width:60px">
-            <button class="btn btn-small btn-danger scr-del" onclick="this.parentElement.remove()">✕</button>
+        <div class="server-config-block" data-idx="${i}">
+            <div class="server-config-row">
+                <input class="scr-name modal-input" placeholder="Name" value="${esc(s.name)}">
+                <input class="scr-host modal-input" placeholder="Host" value="${esc(s.host)}">
+                <input class="scr-port modal-input" placeholder="Port" value="${s.port || 3050}" style="max-width:60px">
+                <button class="btn btn-small btn-danger scr-del" onclick="this.closest('.server-config-block').remove()">✕</button>
+            </div>
+            <div class="server-config-auth">
+                <label class="auth-label">Auth:
+                    <select class="scr-auth modal-input">
+                        <option value="" ${!s.auth_plugin ? 'selected' : ''}>Auto (Srp256 → Srp → Legacy)</option>
+                        <option value="Srp256" ${s.auth_plugin === 'Srp256' ? 'selected' : ''}>Srp256 (InterBase 2020+)</option>
+                        <option value="Srp" ${s.auth_plugin === 'Srp' ? 'selected' : ''}>Srp (Firebird 3)</option>
+                        <option value="Legacy_Auth" ${s.auth_plugin === 'Legacy_Auth' ? 'selected' : ''}>Legacy_Auth (old InterBase)</option>
+                    </select>
+                </label>
+                <label class="auth-label">Wire encryption:
+                    <select class="scr-wirecrypt modal-input">
+                        <option value="true" ${s.wire_crypt !== false ? 'selected' : ''}>Enabled</option>
+                        <option value="false" ${s.wire_crypt === false ? 'selected' : ''}>Disabled</option>
+                    </select>
+                </label>
+            </div>
+            <div class="server-config-dbs">
+                ${s.databases.map((db, j) => `
+                    <div class="scr-db-row">
+                        <input class="modal-input" placeholder="DB Name" value="${esc(db.name)}" data-field="name">
+                        <input class="modal-input" placeholder="DB Path" value="${esc(db.path)}" data-field="path">
+                        <button class="btn btn-small btn-danger" onclick="this.parentElement.remove()">✕</button>
+                    </div>
+                `).join('')}
+            </div>
+            <hr style="border-color:var(--border);margin:12px 0">
         </div>
-        <div class="server-config-dbs" data-dbs="${i}">
-            ${s.databases.map((db, j) => `
-                <div class="scr-db-row">
-                    <input class="modal-input" placeholder="DB Name" value="${esc(db.name)}" data-field="name">
-                    <input class="modal-input" placeholder="DB Path" value="${esc(db.path)}" data-field="path">
-                    <button class="btn btn-small btn-danger" onclick="this.parentElement.remove()">✕</button>
-                </div>
-            `).join('')}
-        </div>
-        <hr style="border-color:var(--border);margin:12px 0">
     `).join('');
     document.getElementById('settingsModal').style.display = 'flex';
 }
@@ -603,27 +621,45 @@ function addServerConfig() {
     const idx = div.children.length;
     const wrapper = document.createElement('div');
     wrapper.innerHTML = `
-        <div class="server-config-row" data-idx="${idx}">
-            <input class="scr-name modal-input" placeholder="Name" value="New Server">
-            <input class="scr-host modal-input" placeholder="Host" value="">
-            <input class="scr-port modal-input" placeholder="Port" value="3050" style="max-width:60px">
-            <button class="btn btn-small btn-danger scr-del" onclick="this.parentElement.remove()">✕</button>
-        </div>
-        <div class="server-config-dbs" data-dbs="${idx}">
-            <div class="scr-db-row">
-                <input class="modal-input" placeholder="DB Name" value="" data-field="name">
-                <input class="modal-input" placeholder="DB Path" value="" data-field="path">
-                <button class="btn btn-small btn-danger" onclick="this.parentElement.remove()">✕</button>
+        <div class="server-config-block" data-idx="${idx}">
+            <div class="server-config-row">
+                <input class="scr-name modal-input" placeholder="Name" value="New Server">
+                <input class="scr-host modal-input" placeholder="Host" value="">
+                <input class="scr-port modal-input" placeholder="Port" value="3050" style="max-width:60px">
+                <button class="btn btn-small btn-danger scr-del" onclick="this.closest('.server-config-block').remove()">✕</button>
             </div>
+            <div class="server-config-auth">
+                <label class="auth-label">Auth:
+                    <select class="scr-auth modal-input">
+                        <option value="" selected>Auto (Srp256 → Srp → Legacy)</option>
+                        <option value="Srp256">Srp256 (InterBase 2020+)</option>
+                        <option value="Srp">Srp (Firebird 3)</option>
+                        <option value="Legacy_Auth">Legacy_Auth (old InterBase)</option>
+                    </select>
+                </label>
+                <label class="auth-label">Wire encryption:
+                    <select class="scr-wirecrypt modal-input">
+                        <option value="true" selected>Enabled</option>
+                        <option value="false">Disabled</option>
+                    </select>
+                </label>
+            </div>
+            <div class="server-config-dbs">
+                <div class="scr-db-row">
+                    <input class="modal-input" placeholder="DB Name" value="" data-field="name">
+                    <input class="modal-input" placeholder="DB Path" value="" data-field="path">
+                    <button class="btn btn-small btn-danger" onclick="this.parentElement.remove()">✕</button>
+                </div>
+            </div>
+            <hr style="border-color:var(--border);margin:12px 0">
         </div>
-        <hr style="border-color:var(--border);margin:12px 0">
     `;
     div.appendChild(wrapper);
 }
 
 async function saveSettings() {
     const servers = [];
-    document.querySelectorAll('#serversConfig > div').forEach(block => {
+    document.querySelectorAll('#serversConfig .server-config-block').forEach(block => {
         const row = block.querySelector('.server-config-row');
         const dbsDiv = block.querySelector('.server-config-dbs');
         if (!row) return;
@@ -631,6 +667,13 @@ async function saveSettings() {
         const host = row.querySelector('.scr-host').value;
         const port = parseInt(row.querySelector('.scr-port').value) || 3050;
         if (!name || !host) return;
+
+        // Auth plugin + wire encryption
+        const authSelect = block.querySelector('.scr-auth');
+        const wirecryptSelect = block.querySelector('.scr-wirecrypt');
+        const auth_plugin = authSelect ? (authSelect.value || null) : null;
+        const wire_crypt = wirecryptSelect ? (wirecryptSelect.value !== 'false') : true;
+
         const databases = [];
         if (dbsDiv) {
             dbsDiv.querySelectorAll('.scr-db-row').forEach(dr => {
@@ -639,10 +682,11 @@ async function saveSettings() {
                 if (dn && dp) databases.push({ name: dn, path: dp });
             });
         }
-        servers.push({
-            id: 'srv' + Math.random().toString(36).substr(2, 6),
-            name, host, port, databases,
-        });
+        // Preserve existing server ID if it had one
+        const existingIdx = parseInt(block.dataset.idx);
+        const existing = configState?.servers?.[existingIdx];
+        const id = existing?.id || 'srv' + Math.random().toString(36).substr(2, 6);
+        servers.push({ id, name, host, port, auth_plugin, wire_crypt, databases });
     });
 
     const cfg = {
@@ -685,11 +729,16 @@ async function testCurrentConnection() {
         }),
     });
     if (res.ok) {
-        alert('✅ Connection successful!');
+        const auth = res.auth_accepted || res.auth_requested || 'unknown';
+        const crypt = res.wire_crypt ? 'encrypted' : 'plaintext';
+        const proto = res.protocol_version ? `protocol v${(res.protocol_version >>> 0).toString(16)}` : '';
+        alert(`✅ Connection successful!\n\nAuth: ${auth}\nWire: ${crypt}\n${proto}`);
         const dot = document.getElementById(`status-${state.currentServer}`);
         if (dot) dot.className = 'server-status ok';
     } else {
         alert('❌ ' + res.error);
+        const dot = document.getElementById(`status-${state.currentServer}`);
+        if (dot) dot.className = 'server-status error';
     }
 }
 
