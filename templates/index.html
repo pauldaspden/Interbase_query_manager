@@ -74,7 +74,7 @@
         <div class="tab tab-tools" onclick="toggleToolsMenu(event)">🔧 Tools ▾</div>
     </div>
     <div class="tools-dropdown" id="toolsDropdown" style="display:none">
-        <div class="tools-item" onclick="switchTab('multi'); closeToolsMenu()">⇶ Multi-Server Query (SELECT only)</div>
+        <div class="tools-item" onclick="event.stopPropagation(); switchTab('multi'); closeToolsMenu();">⇶ Multi-Server Query (SELECT only)</div>
     </div>
 
     <!-- Tab: Query Editor -->

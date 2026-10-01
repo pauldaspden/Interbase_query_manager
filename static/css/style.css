@@ -207,14 +207,14 @@ body {
 
 .tools-dropdown {
     position: absolute;
-    right: 0;
-    top: 100%;
+    right: 16px;
+    top: 90px;
     background: var(--bg-elev);
     border: 1px solid var(--border);
-    border-radius: 0 0 8px 8px;
+    border-radius: 8px;
     min-width: 260px;
-    z-index: 100;
-    box-shadow: 0 4px 12px rgba(0,0,0,.3);
+    z-index: 1000;
+    box-shadow: 0 4px 12px rgba(0,0,0,.4);
 }
 .tools-item {
     padding: 10px 16px;

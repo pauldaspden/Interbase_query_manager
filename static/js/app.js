@@ -942,17 +942,25 @@ function switchTab(tab) {
 
 // ── Tools dropdown ───────────────────────────────────────────────
 function toggleToolsMenu(event) {
-    event.stopPropagation();
+    if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+    }
     const dd = document.getElementById('toolsDropdown');
-    dd.style.display = dd.style.display === 'none' ? 'block' : 'none';
+    if (!dd) return;
+    const isOpen = dd.style.display === 'block';
+    dd.style.display = isOpen ? 'none' : 'block';
 }
 
 function closeToolsMenu() {
-    document.getElementById('toolsDropdown').style.display = 'none';
+    const dd = document.getElementById('toolsDropdown');
+    if (dd) dd.style.display = 'none';
 }
 
 // Close tools menu when clicking elsewhere
-document.addEventListener('click', (e) => {
+document.addEventListener('mousedown', (e) => {
+    const dd = document.getElementById('toolsDropdown');
+    if (!dd || dd.style.display === 'none') return;
     if (!e.target.closest('.tab-tools') && !e.target.closest('.tools-dropdown')) {
         closeToolsMenu();
     }

@@ -594,9 +594,14 @@ def api_metadata(server_id):
             relations.append({"name": name, "type": rel_type})
 
         # Columns for each relation
-        for rel in relations:
-            cur.execute("""
-                SELECT f.RDB$FIELD_NAME,
+        # InterBase doesn't support ? placeholders through the classic wire
+        # protocol, so we use a single query with all tables at once.
+        # Build a comma-separated list of quoted table names for the IN clause.
+        if relations:
+            table_names = ",".join(f"'{r['name']}'" for r in relations)
+            cur.execute(f"""
+                SELECT f.RDB$RELATION_NAME,
+                       f.RDB$FIELD_NAME,
                        COALESCE(f.RDB$FIELD_SOURCE, ''),
                        f.RDB$NULL_FLAG,
                        f.RDB$FIELD_POSITION,
@@ -606,13 +611,15 @@ def api_metadata(server_id):
                        COALESCE(r.RDB$FIELD_SUB_TYPE, 0)
                 FROM RDB$RELATION_FIELDS f
                 LEFT JOIN RDB$FIELDS r ON f.RDB$FIELD_SOURCE = r.RDB$FIELD_NAME
-                WHERE f.RDB$RELATION_NAME = ?
-                ORDER BY f.RDB$FIELD_POSITION
-            """, (rel["name"],))
-            cols = []
+                WHERE f.RDB$RELATION_NAME IN ({table_names})
+                ORDER BY f.RDB$RELATION_NAME, f.RDB$FIELD_POSITION
+            """)
+            # Build a lookup: table_name -> [columns]
+            cols_by_table = {}
             for r in cur.fetchall():
-                col_name = r[0].strip() if r[0] else ""
-                nullable = not r[2] if r[2] is not None else True
+                tbl = r[0].strip() if r[0] else ""
+                col_name = r[1].strip() if r[1] else ""
+                nullable = not r[3] if r[3] is not None else True
                 # map InterBase/Firebird type codes to readable names
                 type_map = {
                     7: "SMALLINT", 8: "INTEGER", 9: "QUAD", 10: "FLOAT",
@@ -620,13 +627,13 @@ def api_metadata(server_id):
                     16: "INT64", 26: "BLOB", 35: "TIMESTAMP", 37: "VARCHAR",
                     40: "CSTRING",
                 }
-                base_type = type_map.get(r[4], f"TYPE_{r[4]}")
-                length = r[5]
-                scale = r[6]
+                base_type = type_map.get(r[5], f"TYPE_{r[5]}")
+                length = r[6]
+                scale = r[7]
                 if base_type in ("CHAR", "VARCHAR", "CSTRING"):
                     type_str = f"{base_type}({length})"
                 elif base_type == "BLOB":
-                    subtype = r[7]
+                    subtype = r[8]
                     st_map = {0: "BLOB", 1: "TEXT", 2: "BLR"}
                     type_str = f"BLOB SUB_TYPE {subtype}" + (
                         f" ({st_map.get(subtype, subtype)})" if subtype in st_map else ""
@@ -635,13 +642,17 @@ def api_metadata(server_id):
                     type_str = f"{base_type}(*,{abs(scale)})"
                 else:
                     type_str = base_type
-                cols.append({
+                cols_by_table.setdefault(tbl, []).append({
                     "name": col_name,
                     "type": type_str,
                     "nullable": nullable,
-                    "position": r[3] if r[3] is not None else 0,
+                    "position": r[4] if r[4] is not None else 0,
                 })
-            rel["columns"] = cols
+            for rel in relations:
+                rel["columns"] = cols_by_table.get(rel["name"], [])
+        else:
+            for rel in relations:
+                rel["columns"] = []
 
         # Primary keys
         try:
