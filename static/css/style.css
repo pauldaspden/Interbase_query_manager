@@ -596,8 +596,24 @@ body {
 .muted p { padding: 10px; }
 .loading { color: var(--primary); }
 .error-msg { color: var(--error); font-family: var(--mono); font-size: 12px; padding: 10px; }
+.hint-label { font-size: 11px; color: var(--text-muted); font-style: italic; }
 
-/* ═══ Diagnostics ═══ */
+.results-pagination {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 6px 14px;
+    background: var(--bg-elev);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+.results-pagination .page-info { font-size: 12px; color: var(--text-dim); }
+.results-pagination .page-jump { font-size: 11px; color: var(--text-muted); margin-left: auto; }
+.results-pagination .page-jump input {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 4px;
+    padding: 2px 6px; color: var(--text); font-size: 12px;
+}
+.results-pagination button:disabled { opacity: .4; cursor: default; }
 .diag-section { margin-bottom: 20px; }
 .diag-section h3 { font-size: 13px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
 .diag-row {

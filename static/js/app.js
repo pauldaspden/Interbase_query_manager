@@ -403,26 +403,90 @@ function showDmlResult(affected, elapsed) {
     `;
 }
 
+// ── Results state (for pagination) ───────────────────────────────
+let resultsState = {
+    allRows: [],
+    columns: [],
+    page: 0,
+    pageSize: 100,
+    label: '',
+    truncated: false,
+    elapsed: 0,
+};
+
 function renderResults(res, label) {
+    // Store all rows in memory but only render one page at a time
+    resultsState.allRows = res.rows;
+    resultsState.columns = res.columns;
+    resultsState.page = 0;
+    resultsState.label = label;
+    resultsState.truncated = res.truncated || false;
+    resultsState.elapsed = res.elapsed || 0;
+    renderResultsPage();
+}
+
+function renderResultsPage() {
     const panel = document.getElementById('resultsPanel');
     panel.style.display = 'flex';
-    const truncated = res.truncated ? ' <span style="color:var(--warning)">(truncated)</span>' : '';
+    const s = resultsState;
+    const totalPages = Math.ceil(s.allRows.length / s.pageSize);
+    const startIdx = s.page * s.pageSize;
+    const endIdx = Math.min(startIdx + s.pageSize, s.allRows.length);
+    const pageRows = s.allRows.slice(startIdx, endIdx);
+
+    const truncated = s.truncated ? ' <span style="color:var(--warning)">(truncated)</span>' : '';
+    const pageInfo = totalPages > 1
+        ? ` <span style="color:var(--text-muted)">· Page ${s.page + 1}/${totalPages} (rows ${startIdx + 1}-${endIdx} of ${s.allRows.length})</span>`
+        : '';
+
+    let pagination = '';
+    if (totalPages > 1) {
+        pagination = `
+            <div class="results-pagination">
+                <button class="btn btn-small" onclick="resultsPage(-1)" ${s.page === 0 ? 'disabled' : ''}>◀ Prev</button>
+                <span class="page-info">${s.page + 1} / ${totalPages}</span>
+                <button class="btn btn-small" onclick="resultsPage(1)" ${s.page >= totalPages - 1 ? 'disabled' : ''}>Next ▶</button>
+                <span class="page-jump">
+                    Jump to page:
+                    <input type="number" min="1" max="${totalPages}" value="${s.page + 1}"
+                           style="width:60px" onchange="resultsJump(this.value)">
+                </span>
+            </div>
+        `;
+    }
+
     panel.innerHTML = `
         <div class="results-header">
-            <span class="results-info">${label}${truncated} — ${res.columns.length} columns</span>
-            <span class="results-timer">${res.elapsed}s</span>
+            <span class="results-info">${s.label}${truncated} — ${s.columns.length} columns, ${s.allRows.length} rows${pageInfo}</span>
+            <span class="results-timer">${s.elapsed}s</span>
         </div>
+        ${pagination}
         <div class="results-table-wrap">
             <table class="results-table">
-                <thead><tr>${res.columns.map(c => `<th onclick="sortTable(this, ${res.columns.indexOf(c)})">${esc(c)}</th>`).join('')}</tr></thead>
+                <thead><tr>${s.columns.map((c, i) => `<th onclick="sortTable(this, ${i})">${esc(c)}</th>`).join('')}</tr></thead>
                 <tbody>
-                    ${res.rows.map(row =>
+                    ${pageRows.map(row =>
                         `<tr>${row.map(v => `<td>${formatCell(v)}</td>`).join('')}</tr>`
                     ).join('')}
                 </tbody>
             </table>
         </div>
     `;
+}
+
+function resultsPage(dir) {
+    const s = resultsState;
+    const totalPages = Math.ceil(s.allRows.length / s.pageSize);
+    s.page = Math.max(0, Math.min(totalPages - 1, s.page + dir));
+    renderResultsPage();
+}
+
+function resultsJump(pageStr) {
+    const s = resultsState;
+    const totalPages = Math.ceil(s.allRows.length / s.pageSize);
+    const page = Math.max(1, Math.min(totalPages, parseInt(pageStr) || 1)) - 1;
+    s.page = page;
+    renderResultsPage();
 }
 
 function formatCell(v) {
@@ -434,19 +498,20 @@ function formatCell(v) {
 }
 
 function sortTable(th, colIdx) {
-    const table = th.closest('table');
-    const tbody = table.querySelector('tbody');
-    const rows = Array.from(tbody.querySelectorAll('tr'));
+    // Sort all rows (not just current page), then re-render
+    const s = resultsState;
     const asc = th.dataset.sort === 'asc';
     th.dataset.sort = asc ? 'desc' : 'asc';
-    rows.sort((a, b) => {
-        const av = a.cells[colIdx].textContent;
-        const bv = b.cells[colIdx].textContent;
+
+    s.allRows.sort((a, b) => {
+        const av = a[colIdx] === null ? '' : String(a[colIdx]);
+        const bv = b[colIdx] === null ? '' : String(b[colIdx]);
         const an = parseFloat(av), bn = parseFloat(bv);
         if (!isNaN(an) && !isNaN(bn)) return asc ? an - bn : bn - an;
         return asc ? av.localeCompare(bv) : bv.localeCompare(av);
     });
-    rows.forEach(r => tbody.appendChild(r));
+    s.page = 0;
+    renderResultsPage();
 }
 
 // ── Multi-Server Query ───────────────────────────────────────────
