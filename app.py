@@ -239,6 +239,49 @@ def json_safe(obj):
         return [json_safe(v) for v in obj]
     return obj
 
+
+def fast_row_to_json(row):
+    """Convert a single database row to a JSON-safe list.
+
+    This is a non-recursive fast path used for query results, avoiding
+    the overhead of the generic json_safe() which walks types recursively.
+    """
+    out = []
+    for v in row:
+        if v is None:
+            out.append(None)
+        elif isinstance(v, str):
+            # Fast path for pure ASCII (most common case)
+            # Only do encode check if non-ASCII chars present
+            if v.isascii():
+                out.append(v)
+            else:
+                try:
+                    v.encode("utf-8")
+                    out.append(v)
+                except UnicodeEncodeError:
+                    out.append(v.encode("utf-8", errors="replace").decode("utf-8"))
+        elif isinstance(v, Decimal):
+            out.append(float(v))
+        elif isinstance(v, (datetime, date)):
+            out.append(v.isoformat())
+        elif isinstance(v, bytes):
+            try:
+                out.append(v.decode("win1252"))
+            except Exception:
+                h = v.hex()
+                out.append(h[:200] + ("…" if len(h) > 200 else ""))
+        elif isinstance(v, (int, float, bool)):
+            out.append(v)
+        else:
+            out.append(str(v))
+    return out
+
+
+def rows_to_json(rows):
+    """Convert a list of database rows to JSON-safe lists — fast path."""
+    return [fast_row_to_json(r) for r in rows]
+
 # ── History ───────────────────────────────────────────────────────────────
 def load_history():
     if not os.path.exists(HISTORY_PATH):
@@ -707,7 +750,7 @@ def api_table_preview(server_id):
         cur.close()
         return jsonify({
             "columns": cols,
-            "rows": json_safe([list(r) for r in rows]),
+            "rows": rows_to_json(rows),
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -752,6 +795,8 @@ def api_query():
         # Check if this is a SELECT-like query that returns rows
         if cur.description:
             columns = [d[0] for d in cur.description]
+            # Increase fetch batch size for better performance with large result sets
+            cur.arraysize = min(max_rows, 2000)
             rows = cur.fetchmany(max_rows)
             row_count = len(rows)
             elapsed = time.time() - t0
@@ -766,7 +811,7 @@ def api_query():
             })
             return jsonify({
                 "columns": columns,
-                "rows": json_safe([list(r) for r in rows]),
+                "rows": rows_to_json(rows),
                 "row_count": row_count,
                 "truncated": row_count >= max_rows,
                 "elapsed": round(elapsed, 3),
@@ -845,11 +890,12 @@ def api_multi_query():
             cur.execute(sql)
             if cur.description:
                 cols = [d[0] for d in cur.description]
+                cur.arraysize = min(max_rows, 2000)
                 rows = cur.fetchmany(max_rows)
                 entry["ok"] = True
                 entry["type"] = "SELECT"
                 entry["columns"] = cols
-                entry["rows"] = json_safe([list(r) for r in rows])
+                entry["rows"] = rows_to_json(rows)
                 entry["row_count"] = len(rows)
                 entry["truncated"] = len(rows) >= max_rows
             else:
