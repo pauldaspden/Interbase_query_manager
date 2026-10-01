@@ -63,6 +63,15 @@ async function api(url, opts = {}) {
         ...opts,
         headers: { 'Content-Type': 'application/json', ...opts.headers },
     });
+    // Handle non-JSON responses (e.g. Flask HTML error pages)
+    const contentType = res.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) {
+        const text = await res.text();
+        // Try to extract the error from HTML
+        const match = text.match(/<title>(.*?)<\/title>/i);
+        const errTitle = match ? match[1] : `HTTP ${res.status}`;
+        throw new Error(`${errTitle} — server returned HTML instead of JSON. Check if the database connection is working.`);
+    }
     return res.json();
 }
 
@@ -230,10 +239,14 @@ async function loadMetadata() {
 
     try {
         const meta = await api(`/api/metadata/${state.currentServer}?db=${encodeURIComponent(state.currentDb)}`);
+        if (meta.error) {
+            tree.innerHTML = `<div class="error-msg">${esc(meta.error)}</div>`;
+            return;
+        }
         state.metadata = meta;
         renderMetadata(meta);
     } catch (e) {
-        tree.innerHTML = `<p class="error-msg">${esc(e.message)}</p>`;
+        tree.innerHTML = `<div class="error-msg">${esc(e.message)}</div>`;
     }
 }
 

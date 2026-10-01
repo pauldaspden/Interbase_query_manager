@@ -576,90 +576,97 @@ def api_metadata(server_id):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-    cur = conn.cursor()
+    try:
+        cur = conn.cursor()
 
-    # Tables & views
-    cur.execute("""
-        SELECT r.RDB$RELATION_NAME, r.RDB$RELATION_TYPE, r.RDB$DESCRIPTION
-        FROM RDB$RELATIONS r
-        WHERE r.RDB$SYSTEM_FLAG = 0 OR r.RDB$SYSTEM_FLAG IS NULL
-        ORDER BY r.RDB$RELATION_NAME
-    """)
-    relations = []
-    for row in cur.fetchall():
-        name = row[0].strip() if row[0] else ""
-        rtype = row[1] if row[1] else 0
-        rel_type = "VIEW" if rtype == 1 else "TABLE"
-        relations.append({"name": name, "type": rel_type})
-
-    # Columns for each relation
-    for rel in relations:
+        # Tables & views
         cur.execute("""
-            SELECT f.RDB$FIELD_NAME,
-                   COALESCE(f.RDB$FIELD_SOURCE, ''),
-                   f.RDB$NULL_FLAG,
-                   f.RDB$FIELD_POSITION,
-                   COALESCE(r.RDB$FIELD_TYPE, 0),
-                   COALESCE(r.RDB$FIELD_LENGTH, 0),
-                   COALESCE(r.RDB$FIELD_SCALE, 0),
-                   COALESCE(r.RDB$FIELD_SUB_TYPE, 0)
-            FROM RDB$RELATION_FIELDS f
-            LEFT JOIN RDB$FIELDS r ON f.RDB$FIELD_SOURCE = r.RDB$FIELD_NAME
-            WHERE f.RDB$RELATION_NAME = ?
-            ORDER BY f.RDB$FIELD_POSITION
-        """, (rel["name"],))
-        cols = []
-        for r in cur.fetchall():
-            col_name = r[0].strip() if r[0] else ""
-            nullable = not r[2] if r[2] is not None else True
-            # map InterBase/Firebird type codes to readable names
-            type_map = {
-                7: "SMALLINT", 8: "INTEGER", 9: "QUAD", 10: "FLOAT",
-                11: "DOUBLE", 12: "DATE", 13: "TIME", 14: "CHAR",
-                16: "INT64", 26: "BLOB", 35: "TIMESTAMP", 37: "VARCHAR",
-                40: "CSTRING",
-            }
-            base_type = type_map.get(r[4], f"TYPE_{r[4]}")
-            length = r[5]
-            scale = r[6]
-            if base_type in ("CHAR", "VARCHAR", "CSTRING"):
-                type_str = f"{base_type}({length})"
-            elif base_type == "BLOB":
-                subtype = r[7]
-                st_map = {0: "BLOB", 1: "TEXT", 2: "BLR"}
-                type_str = f"BLOB SUB_TYPE {subtype}" + (
-                    f" ({st_map.get(subtype, subtype)})" if subtype in st_map else ""
-                )
-            elif scale and scale != 0:
-                type_str = f"{base_type}(*,{abs(scale)})"
-            else:
-                type_str = base_type
-            cols.append({
-                "name": col_name,
-                "type": type_str,
-                "nullable": nullable,
-                "position": r[3] if r[3] is not None else 0,
-            })
-        rel["columns"] = cols
+            SELECT r.RDB$RELATION_NAME, r.RDB$RELATION_TYPE
+            FROM RDB$RELATIONS r
+            WHERE r.RDB$SYSTEM_FLAG = 0 OR r.RDB$SYSTEM_FLAG IS NULL
+            ORDER BY r.RDB$RELATION_NAME
+        """)
+        relations = []
+        for row in cur.fetchall():
+            name = row[0].strip() if row[0] else ""
+            rtype = row[1] if row[1] else 0
+            rel_type = "VIEW" if rtype == 1 else "TABLE"
+            relations.append({"name": name, "type": rel_type})
 
-    # Primary keys
-    cur.execute("""
-        SELECT rc.RDB$RELATION_NAME, rc.RDB$FIELD_NAME
-        FROM RDB$RELATION_CONSTRAINTS rc
-        WHERE rc.RDB$CONSTRAINT_TYPE = 'PRIMARY KEY'
-          AND rc.RDB$INDEX_NAME IS NOT NULL
-    """)
-    pk_map = {}
-    for row in cur.fetchall():
-        tbl = row[0].strip() if row[0] else ""
-        col = row[1].strip() if row[1] else ""
-        pk_map.setdefault(tbl, []).append(col)
+        # Columns for each relation
+        for rel in relations:
+            cur.execute("""
+                SELECT f.RDB$FIELD_NAME,
+                       COALESCE(f.RDB$FIELD_SOURCE, ''),
+                       f.RDB$NULL_FLAG,
+                       f.RDB$FIELD_POSITION,
+                       COALESCE(r.RDB$FIELD_TYPE, 0),
+                       COALESCE(r.RDB$FIELD_LENGTH, 0),
+                       COALESCE(r.RDB$FIELD_SCALE, 0),
+                       COALESCE(r.RDB$FIELD_SUB_TYPE, 0)
+                FROM RDB$RELATION_FIELDS f
+                LEFT JOIN RDB$FIELDS r ON f.RDB$FIELD_SOURCE = r.RDB$FIELD_NAME
+                WHERE f.RDB$RELATION_NAME = ?
+                ORDER BY f.RDB$FIELD_POSITION
+            """, (rel["name"],))
+            cols = []
+            for r in cur.fetchall():
+                col_name = r[0].strip() if r[0] else ""
+                nullable = not r[2] if r[2] is not None else True
+                # map InterBase/Firebird type codes to readable names
+                type_map = {
+                    7: "SMALLINT", 8: "INTEGER", 9: "QUAD", 10: "FLOAT",
+                    11: "DOUBLE", 12: "DATE", 13: "TIME", 14: "CHAR",
+                    16: "INT64", 26: "BLOB", 35: "TIMESTAMP", 37: "VARCHAR",
+                    40: "CSTRING",
+                }
+                base_type = type_map.get(r[4], f"TYPE_{r[4]}")
+                length = r[5]
+                scale = r[6]
+                if base_type in ("CHAR", "VARCHAR", "CSTRING"):
+                    type_str = f"{base_type}({length})"
+                elif base_type == "BLOB":
+                    subtype = r[7]
+                    st_map = {0: "BLOB", 1: "TEXT", 2: "BLR"}
+                    type_str = f"BLOB SUB_TYPE {subtype}" + (
+                        f" ({st_map.get(subtype, subtype)})" if subtype in st_map else ""
+                    )
+                elif scale and scale != 0:
+                    type_str = f"{base_type}(*,{abs(scale)})"
+                else:
+                    type_str = base_type
+                cols.append({
+                    "name": col_name,
+                    "type": type_str,
+                    "nullable": nullable,
+                    "position": r[3] if r[3] is not None else 0,
+                })
+            rel["columns"] = cols
 
-    for rel in relations:
-        rel["primary_key"] = pk_map.get(rel["name"], [])
+        # Primary keys
+        try:
+            cur.execute("""
+                SELECT rc.RDB$RELATION_NAME, rc.RDB$FIELD_NAME
+                FROM RDB$RELATION_CONSTRAINTS rc
+                WHERE rc.RDB$CONSTRAINT_TYPE = 'PRIMARY KEY'
+                  AND rc.RDB$INDEX_NAME IS NOT NULL
+            """)
+            pk_map = {}
+            for row in cur.fetchall():
+                tbl = row[0].strip() if row[0] else ""
+                col = row[1].strip() if row[1] else ""
+                pk_map.setdefault(tbl, []).append(col)
+        except Exception:
+            pk_map = {}  # PK query might fail on some InterBase versions
 
-    cur.close()
-    return jsonify(json_safe(relations))
+        for rel in relations:
+            rel["primary_key"] = pk_map.get(rel["name"], [])
+
+        cur.close()
+        return jsonify(json_safe(relations))
+
+    except Exception as e:
+        return jsonify({"error": f"Schema query failed: {e}"}), 500
 
 @app.route("/api/table-preview/<server_id>")
 def api_table_preview(server_id):
