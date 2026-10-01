@@ -624,3 +624,7 @@ body {
 .CodeMirror { background: var(--bg) !important; color: var(--text) !important; }
 .CodeMirror-gutters { background: var(--bg-card) !important; border-right: 1px solid var(--border) !important; }
 .CodeMirror-linenumber { color: var(--text-muted) !important; }
+.CodeMirror-selected { background: #2d5a8c !important; }
+.CodeMirror-focused .CodeMirror-selected { background: #3d7ab8 !important; }
+.CodeMirror ::selection { background: #3d7ab8 !important; }
+.CodeMirror ::-moz-selection { background: #3d7ab8 !important; }
