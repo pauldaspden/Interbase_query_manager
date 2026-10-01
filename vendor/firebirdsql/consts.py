@@ -565,6 +565,7 @@ DSQL_drop = 2
 charset_map = {
     # DB CHAR SET NAME    :   PYTHON CODEC NAME (CANONICAL)
     # --------------------------------------------------------------------------
+    'NONE': 'cp1252',  # InterBase NONE charset — decode as WIN1252 by default
     'OCTETS': None,   # Allow to pass through unchanged.
     'UNICODE_FSS': 'utf_8',
     'UTF8':   'utf_8',  # (Firebird 2.0+)
