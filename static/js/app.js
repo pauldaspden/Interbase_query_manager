@@ -133,21 +133,26 @@ function selectDb(serverId, dbPath, dbName, el) {
     state.currentServer = serverId;
     state.currentDb = dbPath;
 
-    // update selects
+    // Update the server dropdown
     const ss = document.getElementById('serverSelect');
     ss.value = serverId;
-    onServerChange();
-    document.getElementById('dbSelect').value = dbPath;
+
+    // Rebuild the database dropdown for this server (without calling onServerChange
+    // which would reset currentDb to the first database)
+    const srv = state.servers.find(s => s.id === serverId);
+    const dbSel = document.getElementById('dbSelect');
+    if (srv) {
+        dbSel.innerHTML = srv.databases.map(db =>
+            `<option value="${esc(db.path)}">${esc(db.name)}</option>`
+        ).join('');
+    }
+    // Now select the actual database the user clicked
+    dbSel.value = dbPath;
 
     // highlight active
     document.querySelectorAll('.db-node').forEach(n => n.classList.remove('active'));
     if (el) {
         el.closest('.db-node')?.classList.add('active');
-    } else {
-        // fallback: find by path
-        document.querySelectorAll('.db-node').forEach(n => {
-            if (n.getAttribute('onclick')?.includes(esc(dbPath))) n.classList.add('active');
-        });
     }
 
     loadMetadata();
