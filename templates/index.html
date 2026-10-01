@@ -29,6 +29,7 @@
     <div class="topbar-right">
         <button class="btn btn-ghost" onclick="openSettings()">⚙ Settings</button>
         <button class="btn btn-ghost" onclick="testCurrentConnection()">🔌 Test Connection</button>
+        <button class="btn btn-ghost" onclick="diagnoseConnection()">🔬 Diagnose</button>
     </div>
 </header>
 
@@ -167,6 +168,22 @@
         <div class="modal-footer">
             <button class="btn btn-primary" onclick="saveSettings()">Save</button>
             <button class="btn btn-ghost" onclick="closeSettings()">Cancel</button>
+        </div>
+    </div>
+</div>
+
+<!-- ═══ Diagnostic Modal ═══ -->
+<div class="modal" id="diagModal" style="display:none">
+    <div class="modal-content" style="max-width:600px">
+        <div class="modal-header">
+            <h2>🔬 Connection Diagnostics</h2>
+            <button class="btn-icon" onclick="document.getElementById('diagModal').style.display='none'">✕</button>
+        </div>
+        <div class="modal-body" id="diagBody">
+            <p class="muted">Running diagnostics…</p>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-ghost" onclick="document.getElementById('diagModal').style.display='none'">Close</button>
         </div>
     </div>
 </div>

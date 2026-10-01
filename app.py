@@ -88,12 +88,12 @@ class ConnectionManager:
         # InterBase files use host/port; we pass host:path as the dsn
         dsn = f"{host}/{port}:{db_path}"
 
-        # InterBase 2020+ uses SRP-256 auth + wire encryption.
-        # firebirdsql defaults to Srp256 with wire_crypt=True, which is correct.
-        # We also try fallbacks for older servers that might not support SRP-256.
+        # InterBase 2020+ uses SRP auth + wire encryption.
+        # firebirdsql defaults to Srp256 with wire_crypt=True.
+        # We try Srp256 → Srp → Legacy_Auth with full error reporting.
         auth_plugin = server.get("auth_plugin")      # None = auto-detect
         wire_crypt  = server.get("wire_crypt", True)  # default on
-        last_err = None
+        errors = []
 
         # If a specific auth plugin is configured, try only that one.
         # Otherwise try Srp256 → Srp → Legacy_Auth in order.
@@ -116,19 +116,19 @@ class ConnectionManager:
                     self._conns[key] = conn
                 return conn
             except Exception as e:
-                last_err = e
-                # If this is Legacy_Auth, passlib might be needed
-                if plugin == "Legacy_Auth" and "passlib" in str(e):
-                    last_err = RuntimeError(
-                        "Legacy_Auth requires 'passlib' package. "
-                        "Install with: pip install passlib"
-                    )
+                err_msg = str(e)
+                # passlib is needed for Legacy_Auth
+                if plugin == "Legacy_Auth" and "passlib" in err_msg:
+                    errors.append(f"{plugin}: requires passlib (not bundled)")
+                else:
+                    errors.append(f"{plugin}: {err_msg}")
                 continue
 
-        # All auth methods failed
+        # All auth methods failed — show ALL errors so you can see what
+        # Srp256 and Srp actually returned (not just the last one)
         raise ConnectionError(
-            f"Could not connect to {host}:{port} — tried {', '.join(auth_chain)}. "
-            f"Last error: {last_err}"
+            f"Could not connect to {host}:{port} — tried {', '.join(auth_chain)}.\n"
+            + "\n".join(f"  • {e}" for e in errors)
         )
 
     def close_all(self):
@@ -309,6 +309,135 @@ def api_test_connection():
         })
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 200
+
+
+@app.route("/api/diagnose-connection", methods=["POST"])
+def api_diagnose_connection():
+    """Try each auth method separately and report detailed errors."""
+    data = request.get_json()
+    server_id = data.get("server_id")
+    db_path   = data.get("db_path")
+    cfg = load_config()
+    creds = cfg.get("credentials", {})
+    username = data.get("username", creds.get("username", "SYSDBA"))
+    password = data.get("password", creds.get("password", "masterkey"))
+
+    server = next((s for s in cfg["servers"] if s["id"] == server_id), None)
+    if not server:
+        return jsonify({"error": f"Server '{server_id}' not found"}), 400
+
+    host = server["host"]
+    port = server.get("port", 3050)
+    dsn = f"{host}/{port}:{db_path}"
+
+    if firebirdsql is None:
+        return jsonify({"error": "firebirdsql not available"}), 500
+
+    # Test raw TCP connectivity first
+    import socket as _socket
+    tcp_result = {"host": host, "port": port}
+    try:
+        sock = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+        sock.settimeout(5)
+        sock.connect((host, port))
+        sock.close()
+        tcp_result["ok"] = True
+        tcp_result["message"] = "TCP connection succeeded"
+    except Exception as e:
+        tcp_result["ok"] = False
+        tcp_result["error"] = str(e)
+        return jsonify({
+            "tcp": tcp_result,
+            "auth_attempts": [],
+            "summary": f"TCP connection to {host}:{port} failed — {e}",
+        })
+
+    # Try each auth method separately
+    wire_crypt = server.get("wire_crypt", True)
+    auth_methods = ["Srp256", "Srp", "Legacy_Auth"]
+    attempts = []
+
+    for plugin in auth_methods:
+        attempt = {"plugin": plugin, "wire_crypt": wire_crypt}
+        try:
+            conn = firebirdsql.connect(
+                dsn=dsn,
+                user=username,
+                password=password,
+                charset="UTF8",
+                auth_plugin_name=plugin,
+                wire_crypt=wire_crypt,
+                timeout=10,
+            )
+            # Connection succeeded — test a simple query
+            cur = conn.cursor()
+            cur.execute("SELECT 1 FROM RDB$DATABASE")
+            cur.fetchone()
+            cur.close()
+
+            accept_plugin = getattr(conn, "accept_plugin_name", b"")
+            if isinstance(accept_plugin, bytes):
+                accept_plugin = accept_plugin.decode("utf-8", errors="replace")
+            protocol = getattr(conn, "accept_version", None)
+
+            attempt["ok"] = True
+            attempt["auth_accepted"] = accept_plugin or plugin
+            attempt["protocol_version"] = protocol
+            attempt["wire_crypt_enabled"] = getattr(conn, "wire_crypt", None)
+            conn.close()
+            # Don't cache — let the real connection manager handle it
+            cm.close(server_id, db_path)
+            break  # success, no need to try more
+        except Exception as e:
+            attempt["ok"] = False
+            attempt["error"] = str(e)
+            # Try to extract the InterBase error code
+            err_str = str(e)
+            if "OperationalError" in err_str or "sqlcode" in err_str.lower():
+                attempt["error_type"] = "database_error"
+            elif "timeout" in err_str.lower() or "refused" in err_str.lower():
+                attempt["error_type"] = "network_error"
+            else:
+                attempt["error_type"] = "auth_error"
+        attempts.append(attempt)
+
+    # Also try with wire_crypt=False in case encryption is the issue
+    if not any(a.get("ok") for a in attempts):
+        for plugin in ["Srp256", "Srp"]:
+            attempt = {"plugin": plugin, "wire_crypt": False}
+            try:
+                conn = firebirdsql.connect(
+                    dsn=dsn,
+                    user=username,
+                    password=password,
+                    charset="UTF8",
+                    auth_plugin_name=plugin,
+                    wire_crypt=False,
+                    timeout=10,
+                )
+                cur = conn.cursor()
+                cur.execute("SELECT 1 FROM RDB$DATABASE")
+                cur.fetchone()
+                cur.close()
+                attempt["ok"] = True
+                attempt["auth_accepted"] = plugin
+                conn.close()
+                cm.close(server_id, db_path)
+                break
+            except Exception as e:
+                attempt["ok"] = False
+                attempt["error"] = str(e)
+            attempts.append(attempt)
+
+    succeeded = [a for a in attempts if a.get("ok")]
+    summary = "Connection succeeded!" if succeeded else \
+        f"All {len(attempts)} auth attempts failed. See details below."
+
+    return jsonify({
+        "tcp": tcp_result,
+        "auth_attempts": attempts,
+        "summary": summary,
+    })
 
 # ── Metadata ──────────────────────────────────────────────────────────────
 @app.route("/api/metadata/<server_id>")

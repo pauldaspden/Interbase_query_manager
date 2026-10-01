@@ -742,6 +742,66 @@ async function testCurrentConnection() {
     }
 }
 
+async function diagnoseConnection() {
+    if (!state.currentServer || !state.currentDb) {
+        alert('Select a database first');
+        return;
+    }
+    // Show a modal with diagnostic results
+    const modal = document.getElementById('diagModal');
+    const body = document.getElementById('diagBody');
+    body.innerHTML = '<p class="muted loading">Running diagnostics…</p>';
+    modal.style.display = 'flex';
+
+    try {
+        const res = await api('/api/diagnose-connection', {
+            method: 'POST',
+            body: JSON.stringify({
+                server_id: state.currentServer,
+                db_path: state.currentDb,
+            }),
+        });
+        renderDiagResults(res);
+    } catch (e) {
+        body.innerHTML = `<p class="error-msg">${esc(e.message)}</p>`;
+    }
+}
+
+function renderDiagResults(res) {
+    const body = document.getElementById('diagBody');
+    let html = '';
+
+    // TCP test
+    const tcp = res.tcp || {};
+    html += `<div class="diag-section">
+        <h3>TCP Connectivity</h3>
+        <div class="diag-row ${tcp.ok ? 'ok' : 'error'}">
+            <span class="diag-icon">${tcp.ok ? '✅' : '❌'}</span>
+            <span>${esc(tcp.host)}:${tcp.port} — ${tcp.ok ? 'Connected' : esc(tcp.error || 'Failed')}</span>
+        </div>
+    </div>`;
+
+    // Auth attempts
+    html += '<div class="diag-section"><h3>Authentication Attempts</h3>';
+    (res.auth_attempts || []).forEach(a => {
+        const ok = a.ok;
+        html += `<div class="diag-row ${ok ? 'ok' : 'error'}">
+            <span class="diag-icon">${ok ? '✅' : '❌'}</span>
+            <span class="diag-method">${esc(a.plugin)} (wire_crypt=${a.wire_crypt})</span>
+            ${ok ? `<span class="diag-detail">Accepted as: ${esc(a.auth_accepted)}, protocol: ${a.protocol_version || '?'}</span>` :
+                   `<span class="diag-detail error-text">${esc(a.error)}</span>`}
+        </div>`;
+    });
+    html += '</div>';
+
+    // Summary
+    html += `<div class="diag-section"><h3>Summary</h3>
+        <p class="${res.auth_attempts?.some(a => a.ok) ? 'ok-text' : 'error-text'}">${esc(res.summary)}</p>
+    </div>`;
+
+    body.innerHTML = html;
+}
+
 // ── Tab switching ────────────────────────────────────────────────
 function switchTab(tab) {
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
