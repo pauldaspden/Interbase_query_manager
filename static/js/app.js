@@ -298,14 +298,14 @@ function filterMetadata() {
 }
 
 function insertTable(tableName) {
-    const sql = `SELECT *\nFROM "${tableName}"\nLIMIT 100;`;
+    const sql = `SELECT *\nFROM "${tableName}"\nROWS 1 TO 100;`;
     state.editor.setValue(sql);
     switchTab('editor');
     state.editor.focus();
 }
 
 async function previewTable(tableName) {
-    state.editor.setValue(`SELECT FIRST 100 *\nFROM "${tableName}";`);
+    state.editor.setValue(`SELECT *\nFROM "${tableName}"\nROWS 1 TO 100;`);
     switchTab('editor');
     const url = `/api/table-preview/${state.currentServer}?db=${encodeURIComponent(state.currentDb)}&table=${encodeURIComponent(tableName)}`;
     showLoading('Loading preview…');

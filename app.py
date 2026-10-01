@@ -701,7 +701,7 @@ def api_table_preview(server_id):
         return jsonify({"error": str(e)}), 500
     try:
         cur = conn.cursor()
-        cur.execute(f'SELECT FIRST 100 * FROM "{table}"')
+        cur.execute(f'SELECT * FROM "{table}" ROWS 1 TO 100')
         cols = [d[0] for d in cur.description]
         rows = cur.fetchall()
         cur.close()
