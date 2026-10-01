@@ -20,13 +20,24 @@ document.addEventListener('DOMContentLoaded', () => {
     loadHistory();
     loadScriptsList();
 
-    // Ctrl+Enter to execute
+    // Ctrl+Enter or F6 to execute
     document.addEventListener('keydown', (e) => {
         if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
             e.preventDefault();
             const activeTab = document.querySelector('.tab.active').dataset.tab;
             if (activeTab === 'editor') runQuery();
             else if (activeTab === 'multi') runMultiQuery();
+        }
+        if (e.key === 'F6') {
+            e.preventDefault();
+            const activeTab = document.querySelector('.tab.active');
+            const tab = activeTab ? activeTab.dataset.tab : 'editor';
+            // Also handle the Tools/multi tab
+            if (tab === 'multi' || (activeTab && activeTab.classList.contains('tab-tools'))) {
+                runMultiQuery();
+            } else if (tab === 'editor') {
+                runQuery();
+            }
         }
     });
 });
