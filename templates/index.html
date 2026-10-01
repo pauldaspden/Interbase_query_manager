@@ -85,6 +85,7 @@
             <button class="btn btn-small" onclick="saveScript()">💾 Save</button>
             <button class="btn btn-small" onclick="newScript()">📄 New</button>
             <span class="spacer"></span>
+            <span class="hint-label">Tip: Select text to run only that query · Ctrl+Enter to execute</span>
             <label class="row-limit-label">Max rows:
                 <input type="number" id="maxRows" value="1000" min="1" max="100000" style="width:80px">
             </label>
@@ -109,16 +110,30 @@
             <strong>⚠ READ-ONLY MODE</strong> — Multi-Server queries are restricted to SELECT statements only.
             INSERT, UPDATE, DELETE, DROP, ALTER, CREATE and other write operations are blocked.
         </div>
-        <div class="multi-info">
-            <p class="muted">Select multiple server+database combinations below, then run the same SQL across all of them simultaneously.</p>
+        <div class="multi-layout">
+            <div class="multi-editor-side">
+                <div class="multi-toolbar">
+                    <button class="btn btn-primary btn-small" onclick="runMultiQuery()">▶ Run (Ctrl+Enter)</button>
+                    <span class="multi-selected-count" id="multiSelectedCount">0 databases selected</span>
+                </div>
+                <div class="editor-wrap">
+                    <textarea id="multiSqlEditor"></textarea>
+                </div>
+                <div id="multiResults"></div>
+            </div>
+            <div class="multi-targets-side">
+                <div class="multi-targets-header">
+                    <span>Target Databases</span>
+                    <div class="multi-select-actions">
+                        <button class="btn btn-small" onclick="multiSelectAll()">✓ All</button>
+                        <button class="btn btn-small" onclick="multiSelectNone()">✗ None</button>
+                    </div>
+                </div>
+                <div class="multi-targets-list" id="multiTargets">
+                    <p class="muted">Loading targets…</p>
+                </div>
+            </div>
         </div>
-        <div class="multi-targets" id="multiTargets">
-            <p class="muted">Loading targets…</p>
-        </div>
-        <div class="editor-wrap" style="margin-top:12px">
-            <textarea id="multiSqlEditor"></textarea>
-        </div>
-        <div id="multiResults"></div>
     </div>
 
     <!-- Tab: History -->

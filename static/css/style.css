@@ -368,21 +368,111 @@ body {
 .meta-col-notnull { color: var(--warning); font-size: 10px; }
 
 /* ═══ Multi-Server ═══ */
-.multi-targets { margin-bottom: 12px; }
-.multi-target {
+.multi-layout {
+    display: flex;
+    gap: 12px;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+}
+.multi-editor-side {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    overflow: auto;
+}
+.multi-targets-side {
+    width: 300px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    background: var(--bg-card);
+}
+.multi-toolbar {
     display: flex;
     align-items: center;
     gap: 10px;
-    padding: 8px 12px;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    margin-bottom: 6px;
-    background: var(--bg-elev);
+    margin-bottom: 8px;
+    flex-shrink: 0;
 }
-.multi-target input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--primary); }
-.multi-target label { flex: 1; cursor: pointer; }
-.multi-target .mt-server { font-weight: 600; color: var(--text); }
-.multi-target .mt-db { color: var(--text-dim); font-size: 12px; }
+.multi-selected-count {
+    font-size: 12px;
+    color: var(--text-dim);
+}
+.multi-targets-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 10px;
+    background: var(--bg-elev);
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+    font-weight: 600;
+    flex-shrink: 0;
+}
+.multi-select-actions { display: flex; gap: 4px; }
+.multi-targets-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 4px;
+}
+
+.mt-server-group { margin-bottom: 2px; }
+.mt-server-header {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 5px 6px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+    background: var(--bg-elev);
+    margin-bottom: 2px;
+}
+.mt-server-header:hover { background: var(--bg-hover); }
+.mt-toggle { font-size: 12px; color: var(--text-dim); width: 14px; flex-shrink: 0; }
+.mt-server-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    flex: 1;
+}
+.mt-server-label input[type=checkbox] { accent-color: var(--primary); }
+.mt-db-count {
+    font-size: 10px;
+    color: var(--text-muted);
+    background: var(--bg);
+    padding: 1px 5px;
+    border-radius: 8px;
+    margin-left: auto;
+}
+.mt-db-list { margin-left: 18px; }
+.mt-db-item {
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 12px;
+}
+.mt-db-item:hover { background: var(--bg-hover); }
+.mt-db-item label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    color: var(--text-dim);
+}
+.mt-db-item input[type=checkbox] { accent-color: var(--primary); width: 14px; height: 14px; }
+.mt-db-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.hint-label {
+    font-size: 11px;
+    color: var(--text-muted);
+    font-style: italic;
+}
 
 .multi-result-card {
     border: 1px solid var(--border);

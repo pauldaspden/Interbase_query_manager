@@ -326,12 +326,21 @@ async function countTable(tableName) {
 
 // ── Query Execution ──────────────────────────────────────────────
 async function runQuery() {
-    const sql = state.editor.getValue().trim();
+    // If text is selected in the editor, run only the selection.
+    // Otherwise run the entire editor content.
+    let sql = '';
+    const selection = state.editor.getSelection();
+    if (selection && selection.trim()) {
+        sql = selection.trim();
+    } else {
+        sql = state.editor.getValue().trim();
+    }
     if (!sql) { alert('Enter a SQL query first'); return; }
     if (!state.currentServer || !state.currentDb) { alert('Select a server and database'); return; }
 
     const maxRows = parseInt(document.getElementById('maxRows').value) || 1000;
-    showLoading('Executing…');
+    const isSelection = selection && selection.trim();
+    showLoading(isSelection ? 'Executing selected query…' : 'Executing…');
 
     try {
         const res = await api('/api/query', {
@@ -432,17 +441,67 @@ function sortTable(th, colIdx) {
 // ── Multi-Server Query ───────────────────────────────────────────
 function renderMultiTargets(servers) {
     const div = document.getElementById('multiTargets');
-    div.innerHTML = servers.map(srv =>
-        srv.databases.map(db => `
-            <div class="multi-target">
-                <input type="checkbox" class="mt-check" data-server="${srv.id}" data-db="${esc(db.path)}" checked>
-                <label>
-                    <div class="mt-server">${esc(srv.name)}</div>
-                    <div class="mt-db">${esc(db.name)} — ${esc(db.path)}</div>
+    div.innerHTML = servers.map(srv => `
+        <div class="mt-server-group">
+            <div class="mt-server-header" onclick="toggleMtServer(this)">
+                <span class="mt-toggle">▾</span>
+                <label class="mt-server-label" onclick="event.stopPropagation()">
+                    <input type="checkbox" class="mt-server-check" data-server="${srv.id}"
+                           onchange="toggleServerDbs('${srv.id}', this.checked)" checked>
+                    <span>${esc(srv.name)}</span>
+                    <span class="mt-db-count">${srv.databases.length} dbs</span>
                 </label>
             </div>
-        `).join('')
-    ).join('');
+            <div class="mt-db-list">
+                ${srv.databases.map(db => `
+                    <div class="mt-db-item">
+                        <label>
+                            <input type="checkbox" class="mt-check" data-server="${srv.id}" data-db="${esc(db.path)}" checked>
+                            <span class="mt-db-name">${esc(db.name)}</span>
+                        </label>
+                    </div>
+                `).join('')}
+            </div>
+        </div>
+    `).join('');
+    updateMultiSelectedCount();
+}
+
+function toggleMtServer(header) {
+    const list = header.nextElementSibling;
+    const toggle = header.querySelector('.mt-toggle');
+    if (list.style.display === 'none') {
+        list.style.display = 'block';
+        toggle.textContent = '▾';
+    } else {
+        list.style.display = 'none';
+        toggle.textContent = '▸';
+    }
+}
+
+function toggleServerDbs(serverId, checked) {
+    document.querySelectorAll(`.mt-check[data-server="${serverId}"]`).forEach(cb => {
+        cb.checked = checked;
+    });
+    updateMultiSelectedCount();
+}
+
+function multiSelectAll() {
+    document.querySelectorAll('.mt-check').forEach(cb => { cb.checked = true; });
+    document.querySelectorAll('.mt-server-check').forEach(cb => { cb.checked = true; });
+    updateMultiSelectedCount();
+}
+
+function multiSelectNone() {
+    document.querySelectorAll('.mt-check').forEach(cb => { cb.checked = false; });
+    document.querySelectorAll('.mt-server-check').forEach(cb => { cb.checked = false; });
+    updateMultiSelectedCount();
+}
+
+function updateMultiSelectedCount() {
+    const checked = document.querySelectorAll('.mt-check:checked');
+    const el = document.getElementById('multiSelectedCount');
+    if (el) el.textContent = `${checked.length} database${checked.length !== 1 ? 's' : ''} selected`;
 }
 
 async function runMultiQuery() {
@@ -958,6 +1017,13 @@ function closeToolsMenu() {
 }
 
 // Close tools menu when clicking elsewhere
+// Update multi-select count when checkboxes change
+document.addEventListener('change', (e) => {
+    if (e.target.classList && e.target.classList.contains('mt-check')) {
+        updateMultiSelectedCount();
+    }
+});
+
 document.addEventListener('mousedown', (e) => {
     const dd = document.getElementById('toolsDropdown');
     if (!dd || dd.style.display === 'none') return;
