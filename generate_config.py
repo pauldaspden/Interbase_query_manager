@@ -61,6 +61,10 @@ for i, row in enumerate(ws.iter_rows(values_only=True)):
         "company_number": str(company_num),
     })
 
+# Sort databases by company_number within each server
+for server_key in servers_data:
+    servers_data[server_key].sort(key=lambda d: int(d["company_number"]) if d["company_number"].isdigit() else 0)
+
 # Build config
 servers = []
 for i, (server_key, dbs) in enumerate(sorted(servers_data.items()), 1):

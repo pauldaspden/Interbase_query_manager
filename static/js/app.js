@@ -85,13 +85,16 @@ function renderServerTree(servers) {
             <div class="server-header" onclick="toggleServer(this)">
                 <span class="server-icon">🖥</span>
                 <span>${esc(srv.name)}</span>
+                <span class="db-count-badge">${srv.databases.length}</span>
                 <span class="server-status unknown" id="status-${srv.id}"></span>
             </div>
             <div class="db-list" style="display:none">
+                <div class="db-add-btn" onclick="openAddDbModal('${srv.id}', '${esc(srv.name)}')">+ Add database</div>
                 ${srv.databases.map(db => `
-                    <div class="db-node" onclick="selectDb('${srv.id}', '${esc(db.path)}', '${esc(db.name)}')">
+                    <div class="db-node" onclick="selectDb('${srv.id}', '${esc(db.path)}', '${esc(db.name)}', this)">
                         <span class="db-icon">🗄</span>
-                        <span>${esc(db.name)}</span>
+                        <span class="db-label">${esc(db.name)}</span>
+                        <button class="db-delete-btn" title="Delete" onclick="deleteDatabase(event, '${srv.id}', '${esc(db.path)}', '${esc(db.name)}')">×</button>
                     </div>
                 `).join('')}
             </div>
@@ -106,7 +109,7 @@ function toggleServer(header) {
     header.classList.toggle('expanded');
 }
 
-function selectDb(serverId, dbPath, dbName) {
+function selectDb(serverId, dbPath, dbName, el) {
     state.currentServer = serverId;
     state.currentDb = dbPath;
 
@@ -118,7 +121,14 @@ function selectDb(serverId, dbPath, dbName) {
 
     // highlight active
     document.querySelectorAll('.db-node').forEach(n => n.classList.remove('active'));
-    event?.target?.closest('.db-node')?.classList.add('active');
+    if (el) {
+        el.closest('.db-node')?.classList.add('active');
+    } else {
+        // fallback: find by path
+        document.querySelectorAll('.db-node').forEach(n => {
+            if (n.getAttribute('onclick')?.includes(esc(dbPath))) n.classList.add('active');
+        });
+    }
 
     loadMetadata();
 }
@@ -151,6 +161,65 @@ function onServerChange() {
 function onDbChange() {
     state.currentDb = document.getElementById('dbSelect').value;
     loadMetadata();
+}
+
+// ── Add / Delete databases ───────────────────────────────────────
+function openAddDbModal(serverId, serverName) {
+    document.getElementById('addDbServerId').value = serverId;
+    document.getElementById('addDbServerName').textContent = serverName;
+    document.getElementById('addDbName').value = '';
+    document.getElementById('addDbPath').value = '';
+    document.getElementById('addDbCompanyNum').value = '';
+    document.getElementById('addDbModal').style.display = 'flex';
+    document.getElementById('addDbName').focus();
+}
+
+function closeAddDbModal() {
+    document.getElementById('addDbModal').style.display = 'none';
+}
+
+async function confirmAddDb() {
+    const serverId = document.getElementById('addDbServerId').value;
+    const name = document.getElementById('addDbName').value.trim();
+    const path = document.getElementById('addDbPath').value.trim();
+    const companyNum = document.getElementById('addDbCompanyNum').value.trim();
+
+    if (!name || !path) {
+        alert('Name and path are required');
+        return;
+    }
+
+    const res = await api(`/api/servers/${serverId}/databases`, {
+        method: 'POST',
+        body: JSON.stringify({ name, path, company_number: companyNum }),
+    });
+
+    if (res.ok) {
+        closeAddDbModal();
+        await loadServers();
+        alert(`Added: ${name}`);
+    } else {
+        alert('Error: ' + (res.error || 'Unknown error'));
+    }
+}
+
+async function deleteDatabase(event, serverId, dbPath, dbName) {
+    event.stopPropagation();
+    if (!confirm(`Delete database "${dbName}"?\n(Path: ${dbPath})\n\nThis only removes it from the app config — it does NOT delete the actual database file.`)) {
+        return;
+    }
+    const res = await api(`/api/servers/${serverId}/databases?path=${encodeURIComponent(dbPath)}`, {
+        method: 'DELETE',
+    });
+    if (res.ok) {
+        await loadServers();
+        // If we deleted the currently selected db, reset
+        if (state.currentDb === dbPath) {
+            state.currentDb = null;
+        }
+    } else {
+        alert('Error: ' + (res.error || 'Unknown error'));
+    }
 }
 
 // ── Metadata ─────────────────────────────────────────────────────

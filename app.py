@@ -264,6 +264,67 @@ def api_save_config():
         return jsonify({"ok": True})
     return jsonify({"ok": False, "error": "No config body"}), 400
 
+# ── Add / delete databases ────────────────────────────────────────────────
+@app.route("/api/servers/<server_id>/databases", methods=["POST"])
+def api_add_database(server_id):
+    """Add a database to a server."""
+    data = request.get_json()
+    db_name = data.get("name", "").strip()
+    db_path = data.get("path", "").strip()
+    company_number = data.get("company_number", "").strip()
+    if not db_name or not db_path:
+        return jsonify({"ok": False, "error": "Name and path are required"}), 400
+
+    cfg = load_config()
+    server = next((s for s in cfg["servers"] if s["id"] == server_id), None)
+    if not server:
+        return jsonify({"ok": False, "error": "Server not found"}), 404
+
+    # Check for duplicate path
+    for db in server["databases"]:
+        if db["path"].lower() == db_path.lower():
+            return jsonify({"ok": False, "error": f"Database path already exists: {db_path}"}), 400
+
+    new_db = {
+        "name": db_name,
+        "path": db_path,
+        "company_number": company_number,
+    }
+    server["databases"].append(new_db)
+
+    # Sort by company_number
+    server["databases"].sort(
+        key=lambda d: int(d.get("company_number", "0"))
+        if str(d.get("company_number", "")).isdigit()
+        else 0
+    )
+
+    save_config(cfg)
+    return jsonify({"ok": True, "database": new_db})
+
+@app.route("/api/servers/<server_id>/databases", methods=["DELETE"])
+def api_delete_database(server_id):
+    """Delete a database from a server by path."""
+    db_path = request.args.get("path", "").strip()
+    if not db_path:
+        return jsonify({"ok": False, "error": "Path parameter required"}), 400
+
+    cfg = load_config()
+    server = next((s for s in cfg["servers"] if s["id"] == server_id), None)
+    if not server:
+        return jsonify({"ok": False, "error": "Server not found"}), 404
+
+    original_count = len(server["databases"])
+    server["databases"] = [
+        db for db in server["databases"] if db["path"].lower() != db_path.lower()
+    ]
+
+    if len(server["databases"]) == original_count:
+        return jsonify({"ok": False, "error": "Database not found"}), 404
+
+    save_config(cfg)
+    return jsonify({"ok": True, "remaining": len(server["databases"])})
+
 @app.route("/api/servers")
 def api_servers():
     cfg = load_config()

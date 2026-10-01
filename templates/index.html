@@ -188,6 +188,33 @@
     </div>
 </div>
 
+<!-- ═══ Add Database Modal ═══ -->
+<div class="modal" id="addDbModal" style="display:none">
+    <div class="modal-content" style="max-width:500px">
+        <div class="modal-header">
+            <h2>＋ Add Database</h2>
+            <button class="btn-icon" onclick="closeAddDbModal()">✕</button>
+        </div>
+        <div class="modal-body">
+            <p class="muted" style="margin-bottom:16px">Server: <strong id="addDbServerName"></strong></p>
+            <input type="hidden" id="addDbServerId">
+            <label>Company Number (optional):
+                <input type="text" id="addDbCompanyNum" class="modal-input" placeholder="e.g. 2635" style="width:120px">
+            </label>
+            <label>Display Name:
+                <input type="text" id="addDbName" class="modal-input" placeholder="e.g. 2635 Shore School">
+            </label>
+            <label>Database Path:
+                <input type="text" id="addDbPath" class="modal-input" placeholder="e.g. E:\DATABASES\2635\2635.IB" style="font-family:var(--mono);font-size:12px">
+            </label>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-primary" onclick="confirmAddDb()">Add</button>
+            <button class="btn btn-ghost" onclick="closeAddDbModal()">Cancel</button>
+        </div>
+    </div>
+</div>
+
 </div><!-- app -->
 
 <script src="{{ url_for('static', filename='js/app.js') }}"></script>
