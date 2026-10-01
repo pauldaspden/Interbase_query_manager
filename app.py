@@ -169,7 +169,7 @@ class ConnectionManager:
                     database=db_path,
                     user=username,
                     password=password,
-                    charset="UTF8",
+                    charset="WIN1252",
                     auth_plugin_name=plugin,
                     wire_crypt=wire_crypt,
                     timeout=10,
@@ -219,9 +219,20 @@ def json_safe(obj):
     if isinstance(obj, (datetime, date)):
         return obj.isoformat()
     if isinstance(obj, bytes):
-        # hex-encode blobs; show first 200 chars
-        h = obj.hex()
-        return h[:200] + ("…" if len(h) > 200 else "")
+        # Try to decode as text first (BLOB sub_type text), fall back to hex
+        try:
+            return obj.decode("win1252")
+        except Exception:
+            h = obj.hex()
+            return h[:200] + ("…" if len(h) > 200 else "")
+    if isinstance(obj, str):
+        # Ensure the string is valid UTF-8 for JSON serialization
+        # (WIN1252 chars like smart quotes may cause issues)
+        try:
+            obj.encode("utf-8")
+            return obj
+        except UnicodeEncodeError:
+            return obj.encode("utf-8", errors="replace").decode("utf-8")
     if isinstance(obj, dict):
         return {k: json_safe(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
@@ -535,7 +546,7 @@ def api_diagnose_connection():
                     database=db_path,
                     user=username,
                     password=password,
-                    charset="UTF8",
+                    charset="WIN1252",
                     auth_plugin_name=plugin,
                     wire_crypt=False,
                     timeout=10,
