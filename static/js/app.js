@@ -966,6 +966,52 @@ document.addEventListener('mousedown', (e) => {
     }
 });
 
+// ── Restart server ───────────────────────────────────────────────
+async function restartServer() {
+    if (!confirm('Restart the server? This takes a few seconds — the page will reconnect automatically.')) return;
+
+    // Show overlay
+    const overlay = document.createElement('div');
+    overlay.id = 'restartOverlay';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:9999;display:flex;align-items:center;justify-content:center;color:#5b9eff;font-size:18px;font-family:sans-serif;';
+    overlay.innerHTML = '<div style="text-align:center"><div style="font-size:40px;margin-bottom:10px">↻</div>Restarting server…<br><span style="font-size:13px;color:#888" id="restartStatus">Sending restart signal…</span></div>';
+    document.body.appendChild(overlay);
+
+    // Send restart request (may fail — that's OK, server is shutting down)
+    try {
+        await fetch('/api/restart', { method: 'POST' });
+    } catch (e) {
+        // Expected — connection drops during restart
+    }
+
+    // Poll until server comes back
+    let attempts = 0;
+    const maxAttempts = 30;
+    const statusEl = document.getElementById('restartStatus');
+
+    const poll = setInterval(async () => {
+        attempts++;
+        if (statusEl) statusEl.textContent = `Waiting for server… (attempt ${attempts}/${maxAttempts})`;
+        try {
+            const res = await fetch('/api/servers', { signal: AbortSignal.timeout(2000) });
+            if (res.ok) {
+                clearInterval(poll);
+                if (statusEl) statusEl.textContent = 'Server is back! Reloading…';
+                setTimeout(() => {
+                    overlay.remove();
+                    location.reload();
+                }, 500);
+            }
+        } catch (e) {
+            // Server not back yet, keep polling
+        }
+        if (attempts >= maxAttempts) {
+            clearInterval(poll);
+            if (statusEl) statusEl.textContent = 'Server took too long. Close this window and run start.bat again.';
+        }
+    }, 1000);
+}
+
 // ── Utility ──────────────────────────────────────────────────────
 function esc(s) {
     if (s === null || s === undefined) return '';

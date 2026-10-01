@@ -951,11 +951,48 @@ def api_export():
         headers={"Content-Disposition": "attachment; filename=query_results.csv"},
     )
 
-# ── Shutdown ─────────────────────────────────────────────────────────────
+# ── Shutdown / Restart ───────────────────────────────────────────────────
 @app.route("/api/shutdown", methods=["POST"])
 def api_shutdown():
     cm.close_all()
     return jsonify({"ok": True})
+
+@app.route("/api/restart", methods=["POST"])
+def api_restart():
+    """Restart the Flask server.
+
+    Writes a flag file that start.bat watches, then exits.
+    start.bat will restart the server automatically.
+    Also works with os.execv as a fallback.
+    """
+    cm.close_all()
+
+    # Write a restart flag file so the launcher knows to restart
+    # (rather than just exiting)
+    restart_flag = os.path.join(BASE_DIR, ".restart_flag")
+    try:
+        with open(restart_flag, "w") as f:
+            f.write("restart")
+    except Exception:
+        pass
+
+    # Schedule the actual shutdown after the response is sent
+    import threading as _threading
+    import time as _time
+
+    def _do_restart():
+        _time.sleep(0.5)
+        try:
+            cm.close_all()
+        except Exception:
+            pass
+        # Use os._exit to force-kill the process; start.bat will restart it
+        os._exit(0)
+
+    t = _threading.Thread(target=_do_restart, daemon=True)
+    t.start()
+
+    return jsonify({"ok": True, "message": "Restarting… page will reconnect in a few seconds"})
 
 # ── Main ─────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
