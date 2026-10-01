@@ -85,8 +85,6 @@ class ConnectionManager:
             )
         host = server["host"]
         port = server.get("port", 3050)
-        # InterBase files use host/port; we pass host:path as the dsn
-        dsn = f"{host}/{port}:{db_path}"
 
         # The patched firebirdsql library now auto-detects InterBase:
         # it tries Firebird 3+ protocol (Srp256) first, and if the server
@@ -107,7 +105,9 @@ class ConnectionManager:
         for plugin in auth_chain:
             try:
                 conn = firebirdsql.connect(
-                    dsn=dsn,
+                    host=host,
+                    port=port,
+                    database=db_path,
                     user=username,
                     password=password,
                     charset="UTF8",
@@ -390,7 +390,6 @@ def api_diagnose_connection():
 
     host = server["host"]
     port = server.get("port", 3050)
-    dsn = f"{host}/{port}:{db_path}"
 
     if firebirdsql is None:
         return jsonify({"error": "firebirdsql not available"}), 500
@@ -423,7 +422,9 @@ def api_diagnose_connection():
         attempt = {"plugin": plugin, "wire_crypt": wire_crypt}
         try:
             conn = firebirdsql.connect(
-                dsn=dsn,
+                host=host,
+                port=port,
+                database=db_path,
                 user=username,
                 password=password,
                 charset="UTF8",
@@ -470,7 +471,9 @@ def api_diagnose_connection():
             attempt = {"plugin": plugin, "wire_crypt": False}
             try:
                 conn = firebirdsql.connect(
-                    dsn=dsn,
+                    host=host,
+                    port=port,
+                    database=db_path,
                     user=username,
                     password=password,
                     charset="UTF8",
