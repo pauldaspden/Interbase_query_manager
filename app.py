@@ -32,6 +32,65 @@ except ImportError:
 app = Flask(__name__)
 app.config["JSON_SORT_KEYS"] = False
 
+# ── SQL safety check ──────────────────────────────────────────────────────
+import re as _re
+
+# Keywords that modify data or schema — blocked in multi-server mode
+_WRITE_KEYWORDS = {
+    "insert", "update", "delete", "drop", "alter", "create", "truncate",
+    "merge", "execute", "exec", "grant", "revoke", "set", "commit",
+    "rollback", "savepoint", "declare", "replace", "rename", "attach",
+    "detach", "recreate", "shutdown", "online", "backup", "restore",
+}
+
+def is_readonly_sql(sql):
+    """Return True only if the SQL is a safe read-only SELECT query.
+
+    Checks:
+    1. First non-comment keyword must be SELECT or WITH
+    2. No write keywords found as standalone SQL statements
+    3. Rejects multiple statements containing writes
+    """
+    if not sql or not sql.strip():
+        return False
+
+    # Strip comments (both -- and /* */ styles)
+    cleaned = _re.sub(r'--[^\n]*', '', sql)
+    cleaned = _re.sub(r'/\*.*?\*/', '', cleaned, flags=_re.DOTALL)
+    cleaned = cleaned.strip()
+
+    if not cleaned:
+        return False
+
+    # Split on semicolons to check each statement
+    statements = [s.strip() for s in cleaned.split(';') if s.strip()]
+
+    for stmt in statements:
+        # Get the first word (keyword)
+        first_word = stmt.split()[0].upper() if stmt.split() else ''
+        # Must start with SELECT or WITH (CTE)
+        if first_word not in ('SELECT', 'WITH'):
+            return False
+
+        # Also scan for dangerous keywords that could be embedded
+        # (e.g. "SELECT ... INTO" creates a table in some dialects)
+        words = set(_re.findall(r'\b([A-Za-z_]+)\b', stmt.lower()))
+        # "SELECT ... INTO" is a write operation
+        if 'into' in words and first_word == 'SELECT':
+            return False
+        # Check for any write keywords as statement-level keywords
+        # (not inside string literals — we already stripped comments,
+        # but string literals could still contain these words)
+        # Simple heuristic: if any write keyword appears as a word
+        # outside of quotes, block it
+        stmt_no_strings = _re.sub(r"'[^']*'", "''", stmt)
+        stmt_words = set(_re.findall(r'\b([A-Za-z_]+)\b', stmt_no_strings.lower()))
+        dangerous = stmt_words & _WRITE_KEYWORDS
+        if dangerous:
+            return False
+
+    return True
+
 # ── Paths ─────────────────────────────────────────────────────────────────
 BASE_DIR      = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH    = os.path.join(BASE_DIR, "config.json")
@@ -725,6 +784,17 @@ def api_multi_query():
         return jsonify({"error": "No SQL provided"}), 400
     if not targets:
         return jsonify({"error": "No targets selected"}), 400
+
+    # ── SAFEGUARD: Multi-server mode is SELECT-only ────────────────
+    # Parse the SQL to ensure it's a read-only query. We check for
+    # SELECT and WITH (CTE) as the only allowed leading keywords.
+    # We also reject any DML/DDL keywords found anywhere in the script.
+    if not is_readonly_sql(sql):
+        return jsonify({
+            "error": "Multi-Server mode only allows SELECT queries. "
+                     "INSERT, UPDATE, DELETE, DROP, ALTER, CREATE, EXECUTE, "
+                     "MERGE and other write operations are blocked."
+        }), 400
 
     cfg = load_config()
     creds = cfg.get("credentials", {})

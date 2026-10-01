@@ -69,9 +69,12 @@
     <!-- Tabs -->
     <div class="tabs">
         <div class="tab active" data-tab="editor" onclick="switchTab('editor')">Query Editor</div>
-        <div class="tab" data-tab="multi" onclick="switchTab('multi')">Multi-Server</div>
         <div class="tab" data-tab="history" onclick="switchTab('history')">History</div>
         <div class="tab" data-tab="scripts" onclick="switchTab('scripts')">Saved Scripts</div>
+        <div class="tab tab-tools" onclick="toggleToolsMenu(event)">🔧 Tools ▾</div>
+    </div>
+    <div class="tools-dropdown" id="toolsDropdown" style="display:none">
+        <div class="tools-item" onclick="switchTab('multi'); closeToolsMenu()">⇶ Multi-Server Query (SELECT only)</div>
     </div>
 
     <!-- Tab: Query Editor -->
@@ -99,8 +102,12 @@
         </div>
     </div>
 
-    <!-- Tab: Multi-Server -->
+    <!-- Tab: Multi-Server (accessed via Tools menu, SELECT only) -->
     <div class="tab-content" id="tab-multi">
+        <div class="multi-warning">
+            <strong>⚠ READ-ONLY MODE</strong> — Multi-Server queries are restricted to SELECT statements only.
+            INSERT, UPDATE, DELETE, DROP, ALTER, CREATE and other write operations are blocked.
+        </div>
         <div class="multi-info">
             <p class="muted">Select multiple server+database combinations below, then run the same SQL across all of them simultaneously.</p>
         </div>

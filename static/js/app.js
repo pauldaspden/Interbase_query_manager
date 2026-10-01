@@ -436,6 +436,13 @@ async function runMultiQuery() {
     const sql = state.multiEditor.getValue().trim();
     if (!sql) { alert('Enter SQL first'); return; }
 
+    // Frontend safeguard: check for SELECT-only
+    if (!isSelectOnly(sql)) {
+        alert('⚠ READ-ONLY MODE\n\nMulti-Server mode only allows SELECT queries.\n'
+            + 'INSERT, UPDATE, DELETE, DROP, ALTER, CREATE and other write operations are blocked.');
+        return;
+    }
+
     const checks = document.querySelectorAll('.mt-check:checked');
     if (checks.length === 0) { alert('Select at least one target'); return; }
 
@@ -453,10 +460,39 @@ async function runMultiQuery() {
             method: 'POST',
             body: JSON.stringify({ targets, sql, max_rows: maxRows }),
         });
+        if (res.error) {
+            resDiv.innerHTML = `<div class="error-msg" style="margin-top:12px">${esc(res.error)}</div>`;
+            return;
+        }
         renderMultiResults(res.results);
     } catch (e) {
         resDiv.innerHTML = `<p class="error-msg">${esc(e.message)}</p>`;
     }
+}
+
+// ── SELECT-only check (frontend) ─────────────────────────────────
+function isSelectOnly(sql) {
+    if (!sql || !sql.trim()) return false;
+    // Strip comments
+    let cleaned = sql.replace(/--[^\n]*/g, '').replace(/\/\*.*?\*\//g, 's').trim();
+    if (!cleaned) return false;
+    // Split on semicolons
+    let statements = cleaned.split(';').map(s => s.trim()).filter(s => s.length > 0);
+    if (statements.length === 0) return false;
+
+    const writeWords = /\b(insert|update|delete|drop|alter|create|truncate|merge|execute|exec|grant|revoke|commit|rollback|savepoint|declare|replace|rename|attach|detach|recreate|shutdown|backup|restore)\b/i;
+
+    for (let stmt of statements) {
+        // First word must be SELECT or WITH
+        let firstWord = stmt.split(/\s+/)[0].toUpperCase();
+        if (firstWord !== 'SELECT' && firstWord !== 'WITH') return false;
+        // Check for write keywords (outside string literals)
+        let noStrings = stmt.replace(/'[^']*'/g, "''");
+        if (writeWords.test(noStrings)) return false;
+        // SELECT ... INTO is a write operation
+        if (firstWord === 'SELECT' && /\binto\b/i.test(noStrings)) return false;
+    }
+    return true;
 }
 
 function renderMultiResults(results) {
@@ -873,15 +909,41 @@ function renderDiagResults(res) {
 
 // ── Tab switching ────────────────────────────────────────────────
 function switchTab(tab) {
+    // The multi tab doesn't have a visible tab button (it's behind Tools menu),
+    // so we need to handle it specially
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
     document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-    document.querySelector(`.tab[data-tab="${tab}"]`).classList.add('active');
+
+    // For multi tab, highlight the Tools button
+    if (tab === 'multi') {
+        document.querySelector('.tab-tools')?.classList.add('active');
+    } else {
+        document.querySelector(`.tab[data-tab="${tab}"]`)?.classList.add('active');
+    }
     document.getElementById(`tab-${tab}`).classList.add('active');
     if (state.editor) setTimeout(() => state.editor.refresh(), 10);
     if (state.multiEditor) setTimeout(() => state.multiEditor.refresh(), 10);
     if (tab === 'history') loadHistory();
     if (tab === 'scripts') loadScriptsList();
 }
+
+// ── Tools dropdown ───────────────────────────────────────────────
+function toggleToolsMenu(event) {
+    event.stopPropagation();
+    const dd = document.getElementById('toolsDropdown');
+    dd.style.display = dd.style.display === 'none' ? 'block' : 'none';
+}
+
+function closeToolsMenu() {
+    document.getElementById('toolsDropdown').style.display = 'none';
+}
+
+// Close tools menu when clicking elsewhere
+document.addEventListener('click', (e) => {
+    if (!e.target.closest('.tab-tools') && !e.target.closest('.tools-dropdown')) {
+        closeToolsMenu();
+    }
+});
 
 // ── Utility ──────────────────────────────────────────────────────
 function esc(s) {
