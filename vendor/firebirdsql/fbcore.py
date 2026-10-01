@@ -697,7 +697,6 @@ class ConnectionResponseMixin:
         op_code = bytes_to_bint(b)
         if op_code == self.op_response:
             return self._parse_op_response()    # error occurred
-
         b = self._recv_channel(12)
         self.accept_version = b[3]
         self.accept_architecture = bytes_to_bint(b[4:8])
@@ -1044,19 +1043,37 @@ class ConnectionBase(WireProtocol):
 
         self.sock = SocketStream(self.hostname, self.port, self.timeout, self.cloexec)
 
-        self._op_connect(self.auth_plugin_name, self.wire_crypt, self.wire_compress)
+        # Try Firebird 3+ protocol first (Srp auth)
         try:
+            self._op_connect(self.auth_plugin_name, self.wire_crypt, self.wire_compress)
             self._parse_connect_response()
         except OperationalError as e:
-            self.sock.close()
-            self.sock = None
-            raise e
+            if str(e) == 'Connection is rejected':
+                # InterBase rejects the Firebird 3+ connect protocol.
+                # Fall back to classic InterBase protocol (CONNECT_VERSION 1).
+                self.sock.close()
+                self.sock = SocketStream(self.hostname, self.port, self.timeout, self.cloexec)
+                self._op_connect_interbase(self.wire_crypt)
+                self._parse_connect_response()
+                # Mark as InterBase connection
+                self._is_interbase = True
+            else:
+                self.sock.close()
+                self.sock = None
+                raise e
+        else:
+            self._is_interbase = False
+
         if self.create_new:                      # create database
             self._op_create(self.timezone, self.page_size)
         elif self.is_services:                  # service api
             self._op_service_attach()
         else:                                   # connect
-            self._op_attach(self.timezone)
+            if getattr(self, '_is_interbase', False):
+                # InterBase: pass credentials in DPB
+                self._op_attach_interbase(self.timezone)
+            else:
+                self._op_attach(self.timezone)
         (h, oid, buf) = self._op_response()
         self.db_handle = h
         DEBUG_OUTPUT("Connection::_initialize()", id(self), self.db_handle)

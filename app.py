@@ -88,15 +88,17 @@ class ConnectionManager:
         # InterBase files use host/port; we pass host:path as the dsn
         dsn = f"{host}/{port}:{db_path}"
 
-        # InterBase 2020+ uses SRP auth + wire encryption.
-        # firebirdsql defaults to Srp256 with wire_crypt=True.
-        # We try Srp256 → Srp → Legacy_Auth with full error reporting.
+        # The patched firebirdsql library now auto-detects InterBase:
+        # it tries Firebird 3+ protocol (Srp256) first, and if the server
+        # rejects it (op_reject), falls back to the classic InterBase
+        # protocol (CONNECT_VERSION 1 with password in DPB).
         auth_plugin = server.get("auth_plugin")      # None = auto-detect
         wire_crypt  = server.get("wire_crypt", True)  # default on
         errors = []
 
         # If a specific auth plugin is configured, try only that one.
-        # Otherwise try Srp256 → Srp → Legacy_Auth in order.
+        # Otherwise try Srp256 first (library auto-falls-back to InterBase),
+        # then Srp, then Legacy_Auth as a last resort.
         if auth_plugin:
             auth_chain = [auth_plugin]
         else:
@@ -111,21 +113,20 @@ class ConnectionManager:
                     charset="UTF8",
                     auth_plugin_name=plugin,
                     wire_crypt=wire_crypt,
+                    timeout=10,
                 )
                 with self._lock:
                     self._conns[key] = conn
                 return conn
             except Exception as e:
                 err_msg = str(e)
-                # passlib is needed for Legacy_Auth
                 if plugin == "Legacy_Auth" and "passlib" in err_msg:
                     errors.append(f"{plugin}: requires passlib (not bundled)")
                 else:
                     errors.append(f"{plugin}: {err_msg}")
                 continue
 
-        # All auth methods failed — show ALL errors so you can see what
-        # Srp256 and Srp actually returned (not just the last one)
+        # All auth methods failed — show ALL errors
         raise ConnectionError(
             f"Could not connect to {host}:{port} — tried {', '.join(auth_chain)}.\n"
             + "\n".join(f"  • {e}" for e in errors)
@@ -384,6 +385,7 @@ def api_diagnose_connection():
             attempt["auth_accepted"] = accept_plugin or plugin
             attempt["protocol_version"] = protocol
             attempt["wire_crypt_enabled"] = getattr(conn, "wire_crypt", None)
+            attempt["is_interbase"] = getattr(conn, "_is_interbase", False)
             conn.close()
             # Don't cache — let the real connection manager handle it
             cm.close(server_id, db_path)

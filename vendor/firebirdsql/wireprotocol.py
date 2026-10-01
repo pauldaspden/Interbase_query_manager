@@ -402,6 +402,78 @@ class WireProtocol(object):
         self.sock.send(p.get_buffer() + hex_to_bytes(''.join(protocols)))
 
     @wire_operation
+    def _op_connect_interbase(self, wire_crypt=False):
+        """Old-style connect for InterBase (CONNECT_VERSION 1).
+
+        InterBase does not support Firebird 3's SRP auth plugin negotiation.
+        It uses the classic protocol where user/password go in the DPB.
+        This sends CONNECT_VERSION 1 with a simple uid containing just
+        user, password, and host — no auth plugin list.
+        """
+        protocols = [
+            # PROTOCOL_VERSION, Arch type (Generic=1), min, max, weight
+            '0000000a00000001000000000000000500000002',     # 10, 1, 0, 5, 2
+            'ffff800b00000001000000000000000500000004',     # 11, 1, 0, 5, 4
+            'ffff800c00000001000000000000000500000006',     # 12, 1, 0, 5, 6
+            'ffff800d00000001000000000000000500000008',     # 13, 1, 0, 5, 8
+            'ffff800e0000000100000000000000050000000a',     # 14, 1, 0, 5, 10
+        ]
+
+        # Build a simple uid with just CNCT_user, CNCT_passwd, CNCT_host
+        # (no auth plugin negotiation)
+        def pack_cnct_param(k, v):
+            return bytes([k] + [len(v)]) + v
+
+        if sys.platform == 'win32':
+            hostname = os.environ.get('COMPUTERNAME', '')
+        else:
+            hostname = socket.gethostname()
+
+        r = b''
+        r += pack_cnct_param(CNCT_user, self.str_to_bytes(self.user))
+        r += pack_cnct_param(CNCT_passwd, self.str_to_bytes(self.password))
+        r += pack_cnct_param(CNCT_host, self.str_to_bytes(hostname))
+
+        p = Packer()
+        p.pack_int(self.op_connect)
+        p.pack_int(self.op_attach)
+        p.pack_int(1)   # CONNECT_VERSION 1 (classic — InterBase compatible)
+        p.pack_int(1)   # arch_generic
+        p.pack_bytes(self.str_to_bytes(self.filename if self.filename else ''))
+        p.pack_int(len(protocols))
+        p.pack_bytes(r)
+        self.sock.send(p.get_buffer() + hex_to_bytes(''.join(protocols)))
+
+    @wire_operation
+    def _op_attach_interbase(self, timezone):
+        """Attach for InterBase — passes password in DPB directly.
+
+        InterBase doesn't do auth plugin negotiation, so we must include
+        the password in the DPB (Database Parameter Block) the old way.
+        """
+        dpb = bytes([isc_dpb_version1])
+        s = self.str_to_bytes(self.charset)
+        dpb += bytes([isc_dpb_lc_ctype, len(s)]) + s
+        s = self.str_to_bytes(self.user)
+        dpb += bytes([isc_dpb_user_name, len(s)]) + s
+        # InterBase: always pass plaintext password in DPB
+        s = self.str_to_bytes(self.password)
+        dpb += bytes([isc_dpb_password, len(s)]) + s
+        if self.role:
+            s = self.str_to_bytes(self.role)
+            dpb += bytes([isc_dpb_sql_role_name, len(s)]) + s
+        dpb += bytes([isc_dpb_process_id, 4]) + int_to_bytes(os.getpid(), 4)
+        s = self.str_to_bytes(sys.argv[0] if sys.argv else 'app.py')
+        dpb += bytes([isc_dpb_process_name, len(s)]) + s
+        dpb += bytes([isc_dpb_sql_dialect, 4]) + int_to_bytes(3, 4)
+        p = Packer()
+        p.pack_int(self.op_attach)
+        p.pack_int(0)                       # Database Object ID
+        p.pack_bytes(self.str_to_bytes(self.filename))
+        p.pack_bytes(dpb)
+        self.sock.send(p.get_buffer())
+
+    @wire_operation
     def _op_create(self, timezone, page_size=4096):
         dpb = bytes([1])
         s = self.str_to_bytes(self.charset)
