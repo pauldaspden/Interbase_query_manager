@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>InterBase Query Manager</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/material-darker.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/sql/sql.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/matchbrackets.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/hint/show-hint.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/hint/sql-hint.min.js"></script>
+</head>
+<body>
+<div id="app">
+
+<!-- ═══ Top Bar ═══ -->
+<header class="topbar">
+    <div class="topbar-left">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#5b9eff" stroke-width="2">
+            <ellipse cx="12" cy="5" rx="9" ry="3"/>
+            <path d="M3 5v6c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
+            <path d="M3 11v6c0 1.66 4 3 9 3s9-1.34 9-3v-6"/>
+        </svg>
+        <h1>InterBase Query Manager</h1>
+    </div>
+    <div class="topbar-right">
+        <button class="btn btn-ghost" onclick="openSettings()">⚙ Settings</button>
+        <button class="btn btn-ghost" onclick="testCurrentConnection()">🔌 Test Connection</button>
+    </div>
+</header>
+
+<!-- ═══ Main Layout ═══ -->
+<div class="main-layout">
+
+<!-- ═══ Left Sidebar: Server Tree ═══ -->
+<aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+        <h2>Databases</h2>
+        <button class="btn-icon" title="Refresh" onclick="loadServers()">↻</button>
+    </div>
+    <div class="server-tree" id="serverTree">
+        <p class="muted">Loading servers…</p>
+    </div>
+</aside>
+
+<!-- ═══ Center: Query Editor + Results ═══ -->
+<main class="content">
+    <!-- Connection bar -->
+    <div class="conn-bar">
+        <div class="conn-selects">
+            <label>Server:
+                <select id="serverSelect" onchange="onServerChange()"></select>
+            </label>
+            <label>Database:
+                <select id="dbSelect" onchange="onDbChange()"></select>
+            </label>
+        </div>
+        <div class="conn-actions">
+            <button class="btn btn-primary" onclick="runQuery()">▶ Execute (Ctrl+Enter)</button>
+            <button class="btn btn-secondary" onclick="runMultiQuery()">⇶ Execute on All Selected</button>
+            <button class="btn btn-ghost" onclick="exportCsv()">⬇ Export CSV</button>
+        </div>
+    </div>
+
+    <!-- Tabs -->
+    <div class="tabs">
+        <div class="tab active" data-tab="editor" onclick="switchTab('editor')">Query Editor</div>
+        <div class="tab" data-tab="multi" onclick="switchTab('multi')">Multi-Server</div>
+        <div class="tab" data-tab="history" onclick="switchTab('history')">History</div>
+        <div class="tab" data-tab="scripts" onclick="switchTab('scripts')">Saved Scripts</div>
+    </div>
+
+    <!-- Tab: Query Editor -->
+    <div class="tab-content active" id="tab-editor">
+        <div class="editor-toolbar">
+            <input type="text" id="scriptName" placeholder="Script name (for saving)" class="script-name-input">
+            <button class="btn btn-small" onclick="saveScript()">💾 Save</button>
+            <button class="btn btn-small" onclick="newScript()">📄 New</button>
+            <span class="spacer"></span>
+            <label class="row-limit-label">Max rows:
+                <input type="number" id="maxRows" value="1000" min="1" max="100000" style="width:80px">
+            </label>
+        </div>
+        <div class="editor-wrap">
+            <textarea id="sqlEditor"></textarea>
+        </div>
+        <div class="results-panel" id="resultsPanel" style="display:none">
+            <div class="results-header">
+                <span id="resultsInfo" class="results-info"></span>
+                <span id="resultsTimer" class="results-timer"></span>
+            </div>
+            <div class="results-table-wrap">
+                <table id="resultsTable" class="results-table"></table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tab: Multi-Server -->
+    <div class="tab-content" id="tab-multi">
+        <div class="multi-info">
+            <p class="muted">Select multiple server+database combinations below, then run the same SQL across all of them simultaneously.</p>
+        </div>
+        <div class="multi-targets" id="multiTargets">
+            <p class="muted">Loading targets…</p>
+        </div>
+        <div class="editor-wrap" style="margin-top:12px">
+            <textarea id="multiSqlEditor"></textarea>
+        </div>
+        <div id="multiResults"></div>
+    </div>
+
+    <!-- Tab: History -->
+    <div class="tab-content" id="tab-history">
+        <div class="history-toolbar">
+            <h3>Query History</h3>
+            <button class="btn btn-small btn-danger" onclick="clearHistory()">🗑 Clear History</button>
+        </div>
+        <div id="historyList"></div>
+    </div>
+
+    <!-- Tab: Saved Scripts -->
+    <div class="tab-content" id="tab-scripts">
+        <div class="scripts-toolbar">
+            <h3>Saved Scripts</h3>
+        </div>
+        <div id="scriptsList"></div>
+    </div>
+</main>
+
+<!-- ═══ Right Sidebar: Metadata ═══ -->
+<aside class="metadata-sidebar" id="metadataSidebar">
+    <div class="sidebar-header">
+        <h2>Schema</h2>
+        <button class="btn-icon" title="Refresh" onclick="loadMetadata()">↻</button>
+    </div>
+    <div class="metadata-search">
+        <input type="text" id="metaSearch" placeholder="Search tables/columns…" oninput="filterMetadata()">
+    </div>
+    <div class="metadata-tree" id="metadataTree">
+        <p class="muted">Select a database to load schema.</p>
+    </div>
+</aside>
+
+</div><!-- main-layout -->
+
+<!-- ═══ Settings Modal ═══ -->
+<div class="modal" id="settingsModal" style="display:none">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2>Settings</h2>
+            <button class="btn-icon" onclick="closeSettings()">✕</button>
+        </div>
+        <div class="modal-body">
+            <h3>Default Credentials</h3>
+            <label>Username: <input type="text" id="setUsername" class="modal-input"></label>
+            <label>Password: <input type="password" id="setPassword" class="modal-input" placeholder="***"></label>
+            <h3>Servers</h3>
+            <div id="serversConfig"></div>
+            <button class="btn btn-small" onclick="addServerConfig()">+ Add Server</button>
+            <h3>General</h3>
+            <label>Max rows (default): <input type="number" id="setMaxRows" class="modal-input" style="width:120px"></label>
+            <label>Query timeout (sec): <input type="number" id="setQueryTimeout" class="modal-input" style="width:120px"></label>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-primary" onclick="saveSettings()">Save</button>
+            <button class="btn btn-ghost" onclick="closeSettings()">Cancel</button>
+        </div>
+    </div>
+</div>
+
+</div><!-- app -->
+
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>

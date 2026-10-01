@@ -1,0 +1,714 @@
+/* ═══════════════════════════════════════════════════════════════
+   InterBase Query Manager — Frontend JS
+   ═══════════════════════════════════════════════════════════════ */
+
+// ── State ─────────────────────────────────────────────────────────
+let state = {
+    servers: [],
+    currentServer: null,
+    currentDb: null,
+    metadata: [],
+    editor: null,
+    multiEditor: null,
+};
+
+// ── Init ──────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+    initEditor();
+    loadServers();
+    loadConfig();
+    loadHistory();
+    loadScriptsList();
+
+    // Ctrl+Enter to execute
+    document.addEventListener('keydown', (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+            e.preventDefault();
+            const activeTab = document.querySelector('.tab.active').dataset.tab;
+            if (activeTab === 'editor') runQuery();
+            else if (activeTab === 'multi') runMultiQuery();
+        }
+    });
+});
+
+function initEditor() {
+    const ta = document.getElementById('sqlEditor');
+    state.editor = CodeMirror.fromTextArea(ta, {
+        mode: 'text/x-sql',
+        theme: 'material-darker',
+        lineNumbers: true,
+        matchBrackets: true,
+        indentUnit: 2,
+        tabSize: 2,
+        extraKeys: {
+            'Ctrl-Space': 'autocomplete',
+            'Ctrl-/': (cm) => cm.execCommand('toggleComment'),
+        },
+    });
+
+    const ta2 = document.getElementById('multiSqlEditor');
+    state.multiEditor = CodeMirror.fromTextArea(ta2, {
+        mode: 'text/x-sql',
+        theme: 'material-darker',
+        lineNumbers: true,
+        matchBrackets: true,
+        indentUnit: 2,
+        tabSize: 2,
+    });
+}
+
+// ── API helpers ──────────────────────────────────────────────────
+async function api(url, opts = {}) {
+    const res = await fetch(url, {
+        ...opts,
+        headers: { 'Content-Type': 'application/json', ...opts.headers },
+    });
+    return res.json();
+}
+
+// ── Servers ──────────────────────────────────────────────────────
+async function loadServers() {
+    const servers = await api('/api/servers');
+    state.servers = servers;
+    renderServerTree(servers);
+    populateServerSelect(servers);
+    renderMultiTargets(servers);
+}
+
+function renderServerTree(servers) {
+    const tree = document.getElementById('serverTree');
+    tree.innerHTML = '';
+    servers.forEach(srv => {
+        const node = document.createElement('div');
+        node.className = 'server-node';
+        node.innerHTML = `
+            <div class="server-header" onclick="toggleServer(this)">
+                <span class="server-icon">🖥</span>
+                <span>${esc(srv.name)}</span>
+                <span class="server-status unknown" id="status-${srv.id}"></span>
+            </div>
+            <div class="db-list" style="display:none">
+                ${srv.databases.map(db => `
+                    <div class="db-node" onclick="selectDb('${srv.id}', '${esc(db.path)}', '${esc(db.name)}')">
+                        <span class="db-icon">🗄</span>
+                        <span>${esc(db.name)}</span>
+                    </div>
+                `).join('')}
+            </div>
+        `;
+        tree.appendChild(node);
+    });
+}
+
+function toggleServer(header) {
+    const list = header.nextElementSibling;
+    list.style.display = list.style.display === 'none' ? 'block' : 'none';
+    header.classList.toggle('expanded');
+}
+
+function selectDb(serverId, dbPath, dbName) {
+    state.currentServer = serverId;
+    state.currentDb = dbPath;
+
+    // update selects
+    const ss = document.getElementById('serverSelect');
+    ss.value = serverId;
+    onServerChange();
+    document.getElementById('dbSelect').value = dbPath;
+
+    // highlight active
+    document.querySelectorAll('.db-node').forEach(n => n.classList.remove('active'));
+    event?.target?.closest('.db-node')?.classList.add('active');
+
+    loadMetadata();
+}
+
+function populateServerSelect(servers) {
+    const sel = document.getElementById('serverSelect');
+    sel.innerHTML = servers.map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('');
+    if (servers.length > 0) {
+        state.currentServer = servers[0].id;
+        onServerChange();
+    }
+}
+
+function onServerChange() {
+    const sid = document.getElementById('serverSelect').value;
+    state.currentServer = sid;
+    const srv = state.servers.find(s => s.id === sid);
+    const dbSel = document.getElementById('dbSelect');
+    if (srv) {
+        dbSel.innerHTML = srv.databases.map(db =>
+            `<option value="${esc(db.path)}">${esc(db.name)}</option>`
+        ).join('');
+        if (srv.databases.length > 0) {
+            state.currentDb = srv.databases[0].path;
+        }
+    }
+    loadMetadata();
+}
+
+function onDbChange() {
+    state.currentDb = document.getElementById('dbSelect').value;
+    loadMetadata();
+}
+
+// ── Metadata ─────────────────────────────────────────────────────
+async function loadMetadata() {
+    if (!state.currentServer || !state.currentDb) return;
+    const tree = document.getElementById('metadataTree');
+    tree.innerHTML = '<p class="muted loading">Loading schema…</p>';
+
+    try {
+        const meta = await api(`/api/metadata/${state.currentServer}?db=${encodeURIComponent(state.currentDb)}`);
+        state.metadata = meta;
+        renderMetadata(meta);
+    } catch (e) {
+        tree.innerHTML = `<p class="error-msg">${esc(e.message)}</p>`;
+    }
+}
+
+function renderMetadata(meta) {
+    const tree = document.getElementById('metadataTree');
+    if (!meta || meta.length === 0) {
+        tree.innerHTML = '<p class="muted">No tables found.</p>';
+        return;
+    }
+    tree.innerHTML = meta.map(tbl => `
+        <div class="meta-table" id="meta-${esc(tbl.name)}">
+            <div class="meta-table-header" onclick="toggleMetaTable(this)">
+                <span class="meta-table-type ${tbl.type === 'VIEW' ? 'view' : ''}">${tbl.type}</span>
+                <span>${esc(tbl.name)}</span>
+                ${tbl.primary_key && tbl.primary_key.length ? '<span class="meta-table-type pk">PK</span>' : ''}
+                <span class="meta-table-type" style="margin-left:auto">${tbl.columns?.length || 0} cols</span>
+            </div>
+            <div class="meta-columns">
+                ${(tbl.columns || []).map(col => `
+                    <div class="meta-column">
+                        <span class="meta-col-name ${tbl.primary_key?.includes(col.name) ? 'meta-col-pk' : ''}">${esc(col.name)}</span>
+                        <span class="meta-col-type">${esc(col.type)}</span>
+                        ${!col.nullable ? '<span class="meta-col-notnull">NOT NULL</span>' : ''}
+                    </div>
+                `).join('')}
+                <div style="padding: 4px 8px;">
+                    <button class="btn btn-small" onclick="insertTable('${esc(tbl.name)}')">📋 Insert INTO editor</button>
+                    <button class="btn btn-small" onclick="previewTable('${esc(tbl.name)}')">👁 Preview 100 rows</button>
+                    <button class="btn btn-small" onclick="countTable('${esc(tbl.name)}')">#️⃣ Count</button>
+                </div>
+            </div>
+        </div>
+    `).join('');
+}
+
+function toggleMetaTable(header) {
+    header.parentElement.classList.toggle('expanded');
+}
+
+function filterMetadata() {
+    const q = document.getElementById('metaSearch').value.toLowerCase();
+    document.querySelectorAll('.meta-table').forEach(el => {
+        const text = el.textContent.toLowerCase();
+        el.style.display = text.includes(q) ? '' : 'none';
+        if (q && text.includes(q)) {
+            el.classList.add('expanded');
+        }
+    });
+}
+
+function insertTable(tableName) {
+    const sql = `SELECT *\nFROM "${tableName}"\nLIMIT 100;`;
+    state.editor.setValue(sql);
+    switchTab('editor');
+    state.editor.focus();
+}
+
+async function previewTable(tableName) {
+    state.editor.setValue(`SELECT FIRST 100 *\nFROM "${tableName}";`);
+    switchTab('editor');
+    const url = `/api/table-preview/${state.currentServer}?db=${encodeURIComponent(state.currentDb)}&table=${encodeURIComponent(tableName)}`;
+    showLoading('Loading preview…');
+    const res = await api(url);
+    if (res.error) { showResultError(res.error); return; }
+    renderResults(res, `Preview of ${tableName}`);
+}
+
+async function countTable(tableName) {
+    const url = `/api/table-count/${state.currentServer}?db=${encodeURIComponent(state.currentDb)}&table=${encodeURIComponent(tableName)}`;
+    const res = await api(url);
+    if (res.error) {
+        alert('Error: ' + res.error);
+    } else {
+        alert(`${tableName}: ${res.count.toLocaleString()} rows`);
+    }
+}
+
+// ── Query Execution ──────────────────────────────────────────────
+async function runQuery() {
+    const sql = state.editor.getValue().trim();
+    if (!sql) { alert('Enter a SQL query first'); return; }
+    if (!state.currentServer || !state.currentDb) { alert('Select a server and database'); return; }
+
+    const maxRows = parseInt(document.getElementById('maxRows').value) || 1000;
+    showLoading('Executing…');
+
+    try {
+        const res = await api('/api/query', {
+            method: 'POST',
+            body: JSON.stringify({
+                server_id: state.currentServer,
+                db_path: state.currentDb,
+                sql: sql,
+                max_rows: maxRows,
+            }),
+        });
+        if (res.error) {
+            showResultError(res.error, res.elapsed);
+        } else if (res.rows_affected !== undefined) {
+            showDmlResult(res.rows_affected, res.elapsed);
+        } else {
+            renderResults(res, `${res.row_count} rows`);
+        }
+        loadHistory();
+    } catch (e) {
+        showResultError(e.message);
+    }
+}
+
+function showLoading(msg) {
+    const panel = document.getElementById('resultsPanel');
+    panel.style.display = 'flex';
+    panel.innerHTML = `<div class="results-header"><span class="results-info loading">${msg}</span></div>`;
+}
+
+function showResultError(err, elapsed) {
+    const panel = document.getElementById('resultsPanel');
+    panel.style.display = 'flex';
+    panel.innerHTML = `
+        <div class="results-header">
+            <span class="results-info" style="color:var(--error)">❌ Error${elapsed ? ` (${elapsed}s)` : ''}</span>
+        </div>
+        <div class="error-msg" style="padding:14px">${esc(err)}</div>
+    `;
+}
+
+function showDmlResult(affected, elapsed) {
+    const panel = document.getElementById('resultsPanel');
+    panel.style.display = 'flex';
+    panel.innerHTML = `
+        <div class="results-header">
+            <span class="results-info" style="color:var(--success)">✅ ${affected} row(s) affected (${elapsed}s)</span>
+        </div>
+    `;
+}
+
+function renderResults(res, label) {
+    const panel = document.getElementById('resultsPanel');
+    panel.style.display = 'flex';
+    const truncated = res.truncated ? ' <span style="color:var(--warning)">(truncated)</span>' : '';
+    panel.innerHTML = `
+        <div class="results-header">
+            <span class="results-info">${label}${truncated} — ${res.columns.length} columns</span>
+            <span class="results-timer">${res.elapsed}s</span>
+        </div>
+        <div class="results-table-wrap">
+            <table class="results-table">
+                <thead><tr>${res.columns.map(c => `<th onclick="sortTable(this, ${res.columns.indexOf(c)})">${esc(c)}</th>`).join('')}</tr></thead>
+                <tbody>
+                    ${res.rows.map(row =>
+                        `<tr>${row.map(v => `<td>${formatCell(v)}</td>`).join('')}</tr>`
+                    ).join('')}
+                </tbody>
+            </table>
+        </div>
+    `;
+}
+
+function formatCell(v) {
+    if (v === null || v === undefined) return '<span class="null-val">NULL</span>';
+    if (typeof v === 'number') return `<span class="num-val">${v}</span>`;
+    if (typeof v === 'boolean') return v ? 'true' : 'false';
+    if (typeof v === 'string' && v.length > 200) v = v.substring(0, 200) + '…';
+    return esc(String(v));
+}
+
+function sortTable(th, colIdx) {
+    const table = th.closest('table');
+    const tbody = table.querySelector('tbody');
+    const rows = Array.from(tbody.querySelectorAll('tr'));
+    const asc = th.dataset.sort === 'asc';
+    th.dataset.sort = asc ? 'desc' : 'asc';
+    rows.sort((a, b) => {
+        const av = a.cells[colIdx].textContent;
+        const bv = b.cells[colIdx].textContent;
+        const an = parseFloat(av), bn = parseFloat(bv);
+        if (!isNaN(an) && !isNaN(bn)) return asc ? an - bn : bn - an;
+        return asc ? av.localeCompare(bv) : bv.localeCompare(av);
+    });
+    rows.forEach(r => tbody.appendChild(r));
+}
+
+// ── Multi-Server Query ───────────────────────────────────────────
+function renderMultiTargets(servers) {
+    const div = document.getElementById('multiTargets');
+    div.innerHTML = servers.map(srv =>
+        srv.databases.map(db => `
+            <div class="multi-target">
+                <input type="checkbox" class="mt-check" data-server="${srv.id}" data-db="${esc(db.path)}" checked>
+                <label>
+                    <div class="mt-server">${esc(srv.name)}</div>
+                    <div class="mt-db">${esc(db.name)} — ${esc(db.path)}</div>
+                </label>
+            </div>
+        `).join('')
+    ).join('');
+}
+
+async function runMultiQuery() {
+    const sql = state.multiEditor.getValue().trim();
+    if (!sql) { alert('Enter SQL first'); return; }
+
+    const checks = document.querySelectorAll('.mt-check:checked');
+    if (checks.length === 0) { alert('Select at least one target'); return; }
+
+    const targets = Array.from(checks).map(c => ({
+        server_id: c.dataset.server,
+        db_path: c.dataset.db,
+    }));
+
+    const maxRows = parseInt(document.getElementById('maxRows').value) || 500;
+    const resDiv = document.getElementById('multiResults');
+    resDiv.innerHTML = '<p class="muted loading">Executing across all targets…</p>';
+
+    try {
+        const res = await api('/api/multi-query', {
+            method: 'POST',
+            body: JSON.stringify({ targets, sql, max_rows: maxRows }),
+        });
+        renderMultiResults(res.results);
+    } catch (e) {
+        resDiv.innerHTML = `<p class="error-msg">${esc(e.message)}</p>`;
+    }
+}
+
+function renderMultiResults(results) {
+    const div = document.getElementById('multiResults');
+    div.innerHTML = '';
+    results.forEach(r => {
+        const card = document.createElement('div');
+        card.className = 'multi-result-card';
+        const status = r.ok ? 'ok' : 'error';
+        let body = '';
+        if (!r.ok) {
+            body = `<div class="multi-result-error">${esc(r.error)}</div>`;
+        } else if (r.type === 'SELECT') {
+            body = `
+                <div class="multi-result-body">
+                    <table class="results-table">
+                        <thead><tr>${r.columns.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead>
+                        <tbody>
+                            ${r.rows.map(row => `<tr>${row.map(v => `<td>${formatCell(v)}</td>`).join('')}</tr>`).join('')}
+                        </tbody>
+                    </table>
+                </div>`;
+        } else {
+            body = `<div style="padding:10px;color:var(--success)">✅ ${r.rows_affected} row(s) affected</div>`;
+        }
+        card.innerHTML = `
+            <div class="multi-result-header ${status}">
+                <span class="mr-title">${esc(r.server_name)} → ${esc(r.db_name)}</span>
+                <span class="mr-meta">${r.ok ? (r.row_count || r.rows_affected || 0) + ' rows' : 'Error'} — ${r.elapsed}s</span>
+            </div>
+            ${body}
+        `;
+        div.appendChild(card);
+    });
+}
+
+// ── Export ───────────────────────────────────────────────────────
+async function exportCsv() {
+    const sql = state.editor.getValue().trim();
+    if (!sql || !state.currentServer || !state.currentDb) {
+        alert('Enter a query and select a database first');
+        return;
+    }
+    const res = await fetch('/api/export', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            server_id: state.currentServer,
+            db_path: state.currentDb,
+            sql: sql,
+        }),
+    });
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'query_results.csv';
+    a.click();
+    URL.revokeObjectURL(url);
+}
+
+// ── History ──────────────────────────────────────────────────────
+async function loadHistory() {
+    const history = await api('/api/history');
+    renderHistory(history);
+}
+
+function renderHistory(history) {
+    const div = document.getElementById('historyList');
+    if (!history || history.length === 0) {
+        div.innerHTML = '<p class="muted">No history yet.</p>';
+        return;
+    }
+    div.innerHTML = history.slice().reverse().map(h => {
+        const status = h.error ? 'err' : (h.type === 'ERROR' ? 'err' : 'ok');
+        const meta = h.error
+            ? `<span class="err">error</span>`
+            : `<span class="ok">${h.row_count !== undefined ? h.row_count + ' rows' : h.rows_affected + ' affected'}</span> · ${h.elapsed}s`;
+        return `
+            <div class="history-item">
+                <span class="hi-time">${esc(h.ts)}</span>
+                <span class="hi-sql">${esc(h.sql.substring(0, 200))}</span>
+                <span class="hi-meta">${meta}</span>
+                <span class="hi-actions">
+                    <button class="btn btn-small" onclick="rerunHistory('${esc(h.id)}')">↻ Re-run</button>
+                </span>
+            </div>
+        `;
+    }).join('');
+}
+
+function rerunHistory(id) {
+    // history is loaded but we need to find it; reload then find
+    api('/api/history').then(history => {
+        const h = history.find(x => x.id === id);
+        if (!h) return;
+        state.editor.setValue(h.sql);
+        switchTab('editor');
+        // also set the server/db
+        if (h.server_id) {
+            state.currentServer = h.server_id;
+            state.currentDb = h.db_path;
+            document.getElementById('serverSelect').value = h.server_id;
+            onServerChange();
+            document.getElementById('dbSelect').value = h.db_path;
+        }
+        state.editor.focus();
+    });
+}
+
+async function clearHistory() {
+    if (!confirm('Clear all history?')) return;
+    await api('/api/history', { method: 'DELETE' });
+    loadHistory();
+}
+
+// ── Saved Scripts ────────────────────────────────────────────────
+async function loadScriptsList() {
+    const scripts = await api('/api/scripts');
+    renderScripts(scripts);
+}
+
+function renderScripts(scripts) {
+    const div = document.getElementById('scriptsList');
+    if (!scripts || scripts.length === 0) {
+        div.innerHTML = '<p class="muted">No saved scripts. Use 💾 Save in the Query Editor tab.</p>';
+        return;
+    }
+    div.innerHTML = scripts.map(s => `
+        <div class="script-item">
+            <span class="si-name">${esc(s.name)}</span>
+            <span class="si-meta">${s.size} bytes · ${s.modified}</span>
+            <span class="si-preview">${esc(s.preview)}</span>
+            <button class="btn btn-small" onclick="loadSavedScript('${esc(s.filename)}')">📂 Open</button>
+            <button class="btn btn-small btn-danger" onclick="deleteSavedScript('${esc(s.filename)}')">🗑</button>
+        </div>
+    `).join('');
+}
+
+async function saveScript() {
+    const name = document.getElementById('scriptName').value.trim() || 'untitled';
+    const sql = state.editor.getValue();
+    if (!sql.trim()) { alert('Nothing to save'); return; }
+    await api('/api/scripts', {
+        method: 'POST',
+        body: JSON.stringify({ name, sql }),
+    });
+    alert('Saved!');
+    loadScriptsList();
+}
+
+async function loadSavedScript(fn) {
+    const res = await api(`/api/scripts/${fn}`);
+    if (res.sql !== undefined) {
+        state.editor.setValue(res.sql);
+        document.getElementById('scriptName').value = res.filename.replace('.sql', '');
+        switchTab('editor');
+        state.editor.focus();
+    }
+}
+
+async function deleteSavedScript(fn) {
+    if (!confirm(`Delete ${fn}?`)) return;
+    await api(`/api/scripts/${fn}`, { method: 'DELETE' });
+    loadScriptsList();
+}
+
+function newScript() {
+    state.editor.setValue('');
+    document.getElementById('scriptName').value = '';
+    state.editor.focus();
+}
+
+// ── Config / Settings ────────────────────────────────────────────
+let configState = null;
+
+async function loadConfig() {
+    configState = await api('/api/config');
+}
+
+async function openSettings() {
+    if (!configState) await loadConfig();
+    const c = configState;
+    document.getElementById('setUsername').value = c.credentials?.username || '';
+    document.getElementById('setPassword').value = '';
+    document.getElementById('setMaxRows').value = c.settings?.max_rows || 1000;
+    document.getElementById('setQueryTimeout').value = c.settings?.query_timeout || 30;
+
+    const div = document.getElementById('serversConfig');
+    div.innerHTML = c.servers.map((s, i) => `
+        <div class="server-config-row" data-idx="${i}">
+            <input class="scr-name modal-input" placeholder="Name" value="${esc(s.name)}">
+            <input class="scr-host modal-input" placeholder="Host" value="${esc(s.host)}">
+            <input class="scr-port modal-input" placeholder="Port" value="${s.port || 3050}" style="max-width:60px">
+            <button class="btn btn-small btn-danger scr-del" onclick="this.parentElement.remove()">✕</button>
+        </div>
+        <div class="server-config-dbs" data-dbs="${i}">
+            ${s.databases.map((db, j) => `
+                <div class="scr-db-row">
+                    <input class="modal-input" placeholder="DB Name" value="${esc(db.name)}" data-field="name">
+                    <input class="modal-input" placeholder="DB Path" value="${esc(db.path)}" data-field="path">
+                    <button class="btn btn-small btn-danger" onclick="this.parentElement.remove()">✕</button>
+                </div>
+            `).join('')}
+        </div>
+        <hr style="border-color:var(--border);margin:12px 0">
+    `).join('');
+    document.getElementById('settingsModal').style.display = 'flex';
+}
+
+function addServerConfig() {
+    const div = document.getElementById('serversConfig');
+    const idx = div.children.length;
+    const wrapper = document.createElement('div');
+    wrapper.innerHTML = `
+        <div class="server-config-row" data-idx="${idx}">
+            <input class="scr-name modal-input" placeholder="Name" value="New Server">
+            <input class="scr-host modal-input" placeholder="Host" value="">
+            <input class="scr-port modal-input" placeholder="Port" value="3050" style="max-width:60px">
+            <button class="btn btn-small btn-danger scr-del" onclick="this.parentElement.remove()">✕</button>
+        </div>
+        <div class="server-config-dbs" data-dbs="${idx}">
+            <div class="scr-db-row">
+                <input class="modal-input" placeholder="DB Name" value="" data-field="name">
+                <input class="modal-input" placeholder="DB Path" value="" data-field="path">
+                <button class="btn btn-small btn-danger" onclick="this.parentElement.remove()">✕</button>
+            </div>
+        </div>
+        <hr style="border-color:var(--border);margin:12px 0">
+    `;
+    div.appendChild(wrapper);
+}
+
+async function saveSettings() {
+    const servers = [];
+    document.querySelectorAll('#serversConfig > div').forEach(block => {
+        const row = block.querySelector('.server-config-row');
+        const dbsDiv = block.querySelector('.server-config-dbs');
+        if (!row) return;
+        const name = row.querySelector('.scr-name').value;
+        const host = row.querySelector('.scr-host').value;
+        const port = parseInt(row.querySelector('.scr-port').value) || 3050;
+        if (!name || !host) return;
+        const databases = [];
+        if (dbsDiv) {
+            dbsDiv.querySelectorAll('.scr-db-row').forEach(dr => {
+                const dn = dr.querySelector('[data-field="name"]').value;
+                const dp = dr.querySelector('[data-field="path"]').value;
+                if (dn && dp) databases.push({ name: dn, path: dp });
+            });
+        }
+        servers.push({
+            id: 'srv' + Math.random().toString(36).substr(2, 6),
+            name, host, port, databases,
+        });
+    });
+
+    const cfg = {
+        servers,
+        credentials: {
+            username: document.getElementById('setUsername').value || 'SYSDBA',
+            password: document.getElementById('setPassword').value || configState?.credentials?.password || 'masterkey',
+        },
+        settings: {
+            max_rows: parseInt(document.getElementById('setMaxRows').value) || 1000,
+            query_timeout: parseInt(document.getElementById('setQueryTimeout').value) || 30,
+            theme: 'dark',
+        },
+    };
+
+    await api('/api/config', {
+        method: 'POST',
+        body: JSON.stringify(cfg),
+    });
+    configState = cfg;
+    closeSettings();
+    loadServers();
+    alert('Settings saved!');
+}
+
+function closeSettings() {
+    document.getElementById('settingsModal').style.display = 'none';
+}
+
+async function testCurrentConnection() {
+    if (!state.currentServer || !state.currentDb) {
+        alert('Select a database first');
+        return;
+    }
+    const res = await api('/api/test-connection', {
+        method: 'POST',
+        body: JSON.stringify({
+            server_id: state.currentServer,
+            db_path: state.currentDb,
+        }),
+    });
+    if (res.ok) {
+        alert('✅ Connection successful!');
+        const dot = document.getElementById(`status-${state.currentServer}`);
+        if (dot) dot.className = 'server-status ok';
+    } else {
+        alert('❌ ' + res.error);
+    }
+}
+
+// ── Tab switching ────────────────────────────────────────────────
+function switchTab(tab) {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+    document.querySelector(`.tab[data-tab="${tab}"]`).classList.add('active');
+    document.getElementById(`tab-${tab}`).classList.add('active');
+    if (state.editor) setTimeout(() => state.editor.refresh(), 10);
+    if (state.multiEditor) setTimeout(() => state.multiEditor.refresh(), 10);
+    if (tab === 'history') loadHistory();
+    if (tab === 'scripts') loadScriptsList();
+}
+
+// ── Utility ──────────────────────────────────────────────────────
+function esc(s) {
+    if (s === null || s === undefined) return '';
+    const d = document.createElement('div');
+    d.textContent = String(s);
+    return d.innerHTML;
+}
