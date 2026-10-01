@@ -111,15 +111,38 @@ function renderServerTree(servers) {
             <div class="db-list" style="display:none">
                 <div class="db-add-btn" onclick="openAddDbModal('${srv.id}', '${esc(srv.name)}')">+ Add database</div>
                 ${srv.databases.map(db => `
-                    <div class="db-node" onclick="selectDb('${srv.id}', '${esc(db.path)}', '${esc(db.name)}', this)">
+                    <div class="db-node" data-server-id="${esc(srv.id)}" data-db-path="${esc(db.path)}" data-db-name="${esc(db.name)}">
                         <span class="db-icon">🗄</span>
                         <span class="db-label">${esc(db.name)}</span>
-                        <button class="db-delete-btn" title="Delete" onclick="deleteDatabase(event, '${srv.id}', '${esc(db.path)}', '${esc(db.name)}')">×</button>
+                        <button class="db-delete-btn" title="Delete" data-server-id="${esc(srv.id)}" data-db-path="${esc(db.path)}" data-db-name="${esc(db.name)}">×</button>
                     </div>
                 `).join('')}
             </div>
         `;
         tree.appendChild(node);
+    });
+
+    // Attach click handlers via data attributes (avoids backslash escaping issues
+    // that occur when putting Windows paths in inline onclick="..." attributes)
+    tree.querySelectorAll('.db-node').forEach(node => {
+        node.addEventListener('click', function(e) {
+            if (e.target.classList.contains('db-delete-btn')) return; // handle separately
+            const sid = this.dataset.serverId;
+            const dpath = this.dataset.dbPath;
+            const dname = this.dataset.dbName;
+            selectDb(sid, dpath, dname, this);
+        });
+    });
+
+    // Attach delete handlers
+    tree.querySelectorAll('.db-delete-btn').forEach(btn => {
+        btn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            const sid = this.dataset.serverId;
+            const dpath = this.dataset.dbPath;
+            const dname = this.dataset.dbName;
+            deleteDatabase(e, sid, dpath, dname);
+        });
     });
 }
 
