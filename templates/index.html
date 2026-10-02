@@ -43,6 +43,10 @@
         <h2>Databases</h2>
         <button class="btn-icon" title="Refresh" onclick="loadServers()">↻</button>
     </div>
+    <div class="db-search-bar">
+        <input type="text" id="dbSearch" placeholder="🔍 Search databases…" oninput="searchDatabases()">
+    </div>
+    <div class="db-search-results" id="dbSearchResults" style="display:none"></div>
     <div class="server-tree" id="serverTree">
         <p class="muted">Loading servers…</p>
     </div>

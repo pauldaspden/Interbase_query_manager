@@ -95,6 +95,72 @@ async function loadServers() {
     renderMultiTargets(servers);
 }
 
+// ── Database search ──────────────────────────────────────────────
+function searchDatabases() {
+    const query = document.getElementById('dbSearch').value.trim().toLowerCase();
+    const resultsDiv = document.getElementById('dbSearchResults');
+    const treeDiv = document.getElementById('serverTree');
+
+    if (!query) {
+        resultsDiv.style.display = 'none';
+        resultsDiv.innerHTML = '';
+        treeDiv.style.display = '';
+        return;
+    }
+
+    // Search across all servers and databases
+    const matches = [];
+    for (const srv of state.servers) {
+        for (const db of srv.databases) {
+            const haystack = (db.name + ' ' + (db.company_number || '') + ' ' + db.path).toLowerCase();
+            if (haystack.includes(query)) {
+                matches.push({ server: srv, db: db });
+            }
+        }
+    }
+
+    treeDiv.style.display = 'none';
+    resultsDiv.style.display = 'block';
+
+    if (matches.length === 0) {
+        resultsDiv.innerHTML = '<p class="muted" style="padding:12px">No databases found.</p>';
+        return;
+    }
+
+    // Limit to first 100 matches for performance
+    const shown = matches.slice(0, 100);
+    resultsDiv.innerHTML = `
+        <div class="search-result-count">${matches.length} database${matches.length !== 1 ? 's' : ''} found${matches.length > 100 ? ' (showing first 100)' : ''}</div>
+        ${shown.map(m => `
+            <div class="search-result-item" data-server-id="${esc(m.server.id)}" data-db-path="${esc(m.db.path)}" data-db-name="${esc(m.db.name)}">
+                <div class="search-result-name">${highlightMatch(m.db.name, query)}</div>
+                <div class="search-result-server">${esc(m.server.name)}</div>
+            </div>
+        `).join('')}
+    `;
+
+    // Attach click handlers
+    resultsDiv.querySelectorAll('.search-result-item').forEach(item => {
+        item.addEventListener('click', function() {
+            const sid = this.dataset.serverId;
+            const dpath = this.dataset.dbPath;
+            const dname = this.dataset.dbName;
+            selectDb(sid, dpath, dname, null);
+            // Clear search and show tree
+            document.getElementById('dbSearch').value = '';
+            searchDatabases();
+        });
+    });
+}
+
+function highlightMatch(text, query) {
+    const idx = text.toLowerCase().indexOf(query);
+    if (idx === -1) return esc(text);
+    return esc(text.substring(0, idx)) +
+           '<mark>' + esc(text.substring(idx, idx + query.length)) + '</mark>' +
+           esc(text.substring(idx + query.length));
+}
+
 function renderServerTree(servers) {
     const tree = document.getElementById('serverTree');
     tree.innerHTML = '';
