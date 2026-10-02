@@ -114,16 +114,21 @@ class ConnectionManager:
     def __init__(self):
         self._conns = {}   # (server_id, db_path) -> connection
         self._lock = threading.Lock()
+        self._auth_cache = {}  # host -> auth_plugin that worked
 
     def get(self, server_id, db_path, username, password):
         key = (server_id, db_path)
         with self._lock:
             conn = self._conns.get(key)
             if conn is not None:
-                # Return cached connection directly — skip the liveness
-                # check for performance. If the connection is dead, the
-                # actual query will fail and we'll reconnect on retry.
-                return conn
+                # Quick local check — is the socket still alive?
+                # This doesn't do a network round trip, just checks
+                # if the socket object exists and isn't closed.
+                sock = getattr(conn, 'sock', None)
+                if sock is not None and getattr(sock, '_sock', None) is not None:
+                    return conn
+                # Socket is dead — remove from cache and reconnect
+                self._conns.pop(key, None)
         # create new connection outside lock to avoid blocking
         cfg = load_config()
         server = next((s for s in cfg["servers"] if s["id"] == server_id), None)
@@ -145,10 +150,14 @@ class ConnectionManager:
         errors = []
 
         # If a specific auth plugin is configured, try only that one.
+        # If we've previously found a working auth method for this host,
+        # use it directly (skip the rejected methods).
         # Otherwise try Srp256 first (library auto-falls-back to InterBase),
         # then Srp, then Legacy_Auth as a last resort.
         if auth_plugin:
             auth_chain = [auth_plugin]
+        elif host in self._auth_cache:
+            auth_chain = [self._auth_cache[host]]
         else:
             auth_chain = ["Srp256", "Srp", "Legacy_Auth"]
 
@@ -167,6 +176,8 @@ class ConnectionManager:
                 )
                 with self._lock:
                     self._conns[key] = conn
+                # Remember which auth method worked for this host
+                self._auth_cache[host] = plugin
                 return conn
             except Exception as e:
                 err_msg = str(e)
