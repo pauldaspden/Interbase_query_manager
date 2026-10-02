@@ -975,12 +975,13 @@ def api_export():
                 w.writerow(cols)
                 yield buf.getvalue()
                 buf.seek(0); buf.truncate()
+                cur.arraysize = 2000
                 while True:
-                    batch = cur.fetchmany(500)
+                    batch = cur.fetchmany(2000)
                     if not batch:
                         break
                     for r in batch:
-                        w.writerow([json_safe(x) for x in r])
+                        w.writerow(fast_row_to_json(r))
                     yield buf.getvalue()
                     buf.seek(0); buf.truncate()
             else:

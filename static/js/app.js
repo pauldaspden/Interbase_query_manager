@@ -795,22 +795,53 @@ async function exportCsv() {
         alert('Enter a query and select a database first');
         return;
     }
-    const res = await fetch('/api/export', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            server_id: state.currentServer,
-            db_path: state.currentDb,
-            sql: sql,
-        }),
-    });
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'query_results.csv';
-    a.click();
-    URL.revokeObjectURL(url);
+
+    // Show progress overlay
+    const overlay = document.createElement('div');
+    overlay.id = 'exportOverlay';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:9999;display:flex;align-items:center;justify-content:center;color:#5b9eff;font-size:16px;font-family:sans-serif;';
+    overlay.innerHTML = '<div style="text-align:center"><div style="font-size:36px;margin-bottom:10px" class="spin">⬇</div>Exporting CSV…<br><span style="font-size:12px;color:#888">Downloading large result set, please wait</span></div>';
+    document.body.appendChild(overlay);
+
+    // Add spinner animation
+    if (!document.getElementById('exportSpinStyle')) {
+        const style = document.createElement('style');
+        style.id = 'exportSpinStyle';
+        style.textContent = '@keyframes spin{to{transform:rotate(360deg)}}.spin{display:inline-block;animation:spin 1s linear infinite}';
+        document.head.appendChild(style);
+    }
+
+    try {
+        const res = await fetch('/api/export', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                server_id: state.currentServer,
+                db_path: state.currentDb,
+                sql: sql,
+            }),
+        });
+
+        if (!res.ok) {
+            const text = await res.text();
+            throw new Error(text || `HTTP ${res.status}`);
+        }
+
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        // Generate filename with timestamp
+        const now = new Date();
+        const ts = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}_${String(now.getHours()).padStart(2,'0')}${String(now.getMinutes()).padStart(2,'0')}`;
+        a.download = `query_results_${ts}.csv`;
+        a.click();
+        URL.revokeObjectURL(url);
+    } catch (e) {
+        alert('Export failed: ' + e.message);
+    } finally {
+        overlay.remove();
+    }
 }
 
 // ── History ──────────────────────────────────────────────────────
