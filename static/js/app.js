@@ -853,19 +853,33 @@ async function exportCsv() {
     }
 
     try {
+        // Check if text is selected — export only selection if so
+        let exportSql = sql;
+        const selection = state.editor.getSelection();
+        if (selection && selection.trim()) {
+            exportSql = selection.trim();
+        }
+
+        const maxRows = parseInt(document.getElementById('maxRows').value) || 1000;
         const res = await fetch('/api/export', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 server_id: state.currentServer,
                 db_path: state.currentDb,
-                sql: sql,
+                sql: exportSql,
+                max_rows: Math.max(maxRows, 100000),  // allow more rows for export
             }),
         });
 
+        // Check if response is JSON error (not CSV)
+        const contentType = res.headers.get('content-type') || '';
+        if (contentType.includes('application/json')) {
+            const errData = await res.json();
+            throw new Error(errData.error || 'Export failed');
+        }
         if (!res.ok) {
-            const text = await res.text();
-            throw new Error(text || `HTTP ${res.status}`);
+            throw new Error(`HTTP ${res.status}`);
         }
 
         const blob = await res.blob();

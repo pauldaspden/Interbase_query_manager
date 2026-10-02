@@ -988,50 +988,81 @@ def api_del_script(fn):
 # ── Export CSV ────────────────────────────────────────────────────────────
 @app.route("/api/export", methods=["POST"])
 def api_export():
-    """Execute query and stream results as CSV."""
+    """Execute query and return results as CSV download."""
     data = request.get_json()
     server_id = data.get("server_id")
     db_path   = data.get("db_path")
     sql       = data.get("sql", "").strip()
+    max_rows  = data.get("max_rows", 100000)  # allow large exports
     cfg = load_config()
     creds = cfg.get("credentials", {})
 
-    def generate():
-        import csv as _csv
-        import io
+    import csv as _csv
+    import io
+
+    try:
+        conn = cm.get(server_id, db_path, creds["username"], creds["password"])
+    except Exception as e:
+        return jsonify({"error": f"Connection failed: {e}"}), 500
+
+    try:
+        cur = conn.cursor()
+        cur.execute(sql)
+        if not cur.description:
+            cur.close()
+            return jsonify({"error": "Query does not return rows"}), 400
+
+        columns = [d[0] for d in cur.description]
+        cur.arraysize = 2000
+        rows = cur.fetchmany(max_rows)
+        cur.close()
+
+        # Build CSV in memory — simple and reliable
         buf = io.StringIO()
         w = _csv.writer(buf)
+        w.writerow(columns)
+        for r in rows:
+            w.writerow(fast_row_to_json(r))
+
+        csv_data = buf.getvalue()
+
+        now = datetime.now().strftime("%Y%m%d_%H%M")
+        filename = f"query_results_{now}.csv"
+
+        return Response(
+            csv_data,
+            mimetype="text/csv",
+            headers={"Content-Disposition": f"attachment; filename={filename}"},
+        )
+    except Exception as e:
+        # Retry once on stale connection
+        cm.close(server_id, db_path)
         try:
             conn = cm.get(server_id, db_path, creds["username"], creds["password"])
             cur = conn.cursor()
             cur.execute(sql)
-            if cur.description:
-                cols = [d[0] for d in cur.description]
-                w.writerow(cols)
-                yield buf.getvalue()
-                buf.seek(0); buf.truncate()
-                cur.arraysize = 2000
-                while True:
-                    batch = cur.fetchmany(2000)
-                    if not batch:
-                        break
-                    for r in batch:
-                        w.writerow(fast_row_to_json(r))
-                    yield buf.getvalue()
-                    buf.seek(0); buf.truncate()
-            else:
-                w.writerow(["rows_affected", cur.rowcount])
-                yield buf.getvalue()
+            if not cur.description:
+                cur.close()
+                return jsonify({"error": "Query does not return rows"}), 400
+            columns = [d[0] for d in cur.description]
+            cur.arraysize = 2000
+            rows = cur.fetchmany(max_rows)
             cur.close()
-        except Exception as e:
-            w.writerow(["ERROR", str(e)])
-            yield buf.getvalue()
-
-    return Response(
-        stream_with_context(generate()),
-        mimetype="text/csv",
-        headers={"Content-Disposition": "attachment; filename=query_results.csv"},
-    )
+            buf = io.StringIO()
+            w = _csv.writer(buf)
+            w.writerow(columns)
+            for r in rows:
+                w.writerow(fast_row_to_json(r))
+            csv_data = buf.getvalue()
+            now = datetime.now().strftime("%Y%m%d_%H%M")
+            filename = f"query_results_{now}.csv"
+            return Response(
+                csv_data,
+                mimetype="text/csv",
+                headers={"Content-Disposition": f"attachment; filename={filename}"},
+            )
+        except Exception as e2:
+            return jsonify({"error": str(e2)}), 500
 
 # ── Shutdown / Restart ───────────────────────────────────────────────────
 @app.route("/api/shutdown", methods=["POST"])
