@@ -6,7 +6,8 @@
     <title>InterBase Query Manager</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/material-darker.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/material-darker.min.css" id="cmDarkTheme">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/default.min.css" id="cmLightTheme" disabled>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/sql/sql.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/matchbrackets.min.js"></script>
@@ -27,6 +28,7 @@
         <h1>InterBase Query Manager</h1>
     </div>
     <div class="topbar-right">
+        <button class="btn btn-ghost" id="themeToggle" onclick="toggleTheme()">🌙 Dark</button>
         <button class="btn btn-ghost" onclick="openSettings()">⚙ Settings</button>
         <button class="btn btn-ghost" onclick="testCurrentConnection()">🔌 Test Connection</button>
         <button class="btn btn-ghost" onclick="diagnoseConnection()">🔬 Diagnose</button>

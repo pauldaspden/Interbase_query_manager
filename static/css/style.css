@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════
-   InterBase Query Manager — Dark theme stylesheet
+   InterBase Query Manager — Stylesheet (dark + light themes)
    ═══════════════════════════════════════════════════════════════ */
 
 :root {
@@ -13,12 +13,50 @@
     --text-muted: #666688;
     --primary:    #5b9eff;
     --primary-bg: #1a3a5c;
+    --primary-hover: #4a8de0;
     --success:    #4caf50;
     --error:      #f44336;
+    --error-text: #ff6b6b;
     --warning:    #ff9800;
+    --num-val:    #ffcb6b;
+    --date-val:   #82b1ff;
+    --sel-bg:     #3d7ab8;
+    --sel-bg-unfocused: #2d5a8c;
+    --danger-bg:  #5c1a1a;
+    --danger-hover: #7c2a2a;
+    --danger-border: #8c2a2a;
+    --secondary-hover: #244870;
+    --cm-theme:   material-darker;
     --radius:     8px;
     --font:       'Segoe UI', system-ui, -apple-system, sans-serif;
     --mono:       'Cascadia Code', 'Fira Code', Consolas, monospace;
+}
+
+:root[data-theme="light"] {
+    --bg:          #f5f5f5;
+    --bg-card:    #ffffff;
+    --bg-elev:    #eaeaea;
+    --bg-hover:   #e0e0e0;
+    --border:     #d0d0d0;
+    --text:       #1a1a1a;
+    --text-dim:   #555555;
+    --text-muted: #999999;
+    --primary:    #1565c0;
+    --primary-bg: #e3f2fd;
+    --primary-hover: #1976d2;
+    --success:    #2e7d32;
+    --error:      #c62828;
+    --error-text: #c62828;
+    --warning:    #e65100;
+    --num-val:    #b71c1c;
+    --date-val:   #1565c0;
+    --sel-bg:     #90caf9;
+    --sel-bg-unfocused: #bbdefb;
+    --danger-bg:  #ffebee;
+    --danger-hover: #ffcdd2;
+    --danger-border: #ef9a9a;
+    --secondary-hover: #e3f2fd;
+    --cm-theme:   default;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -63,13 +101,13 @@ body {
 .btn:hover { background: var(--bg-hover); border-color: var(--primary); }
 .btn:active { transform: scale(.97); }
 .btn-primary { background: var(--primary); color: #fff; border-color: var(--primary); font-weight: 600; }
-.btn-primary:hover { background: #4a8de0; }
+.btn-primary:hover { background: var(--primary-hover); }
 .btn-secondary { background: var(--primary-bg); color: var(--primary); border-color: var(--primary); }
-.btn-secondary:hover { background: #244870; }
+.btn-secondary:hover { background: var(--secondary-hover); }
 .btn-ghost { background: transparent; }
 .btn-small { padding: 3px 10px; font-size: 12px; }
-.btn-danger { background: #5c1a1a; color: #ff6b6b; border-color: #8c2a2a; }
-.btn-danger:hover { background: #7c2a2a; }
+.btn-danger { background: var(--danger-bg); color: var(--error-text); border-color: var(--danger-border); }
+.btn-danger:hover { background: var(--danger-hover); }
 .btn-icon {
     background: none; border: none; color: var(--text-dim);
     cursor: pointer; font-size: 18px; padding: 4px;
@@ -332,8 +370,8 @@ body {
 }
 .results-table tr:hover td { background: var(--bg-hover); }
 .results-table .null-val { color: var(--text-muted); font-style: italic; }
-.results-table .num-val { color: #ffcb6b; font-family: var(--mono); }
-.results-table .date-val { color: #82b1ff; font-family: var(--mono); white-space: nowrap; }
+.results-table .num-val { color: var(--num-val); font-family: var(--mono); }
+.results-table .date-val { color: var(--date-val); font-family: var(--mono); white-space: nowrap; }
 
 /* ═══ Right Sidebar — Metadata ═══ */
 .metadata-sidebar {
@@ -517,7 +555,7 @@ body {
 .multi-result-header .mr-title { font-weight: 600; }
 .multi-result-header .mr-meta { font-size: 12px; color: var(--text-muted); }
 .multi-result-body { padding: 8px; max-height: 400px; overflow: auto; }
-.multi-result-error { padding: 10px 14px; color: #ff6b6b; font-family: var(--mono); font-size: 12px; }
+.multi-result-error { padding: 10px 14px; color: var(--error-text); font-family: var(--mono); font-size: 12px; }
 
 /* ═══ History ═══ */
 .history-toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
@@ -664,7 +702,7 @@ body {
 .CodeMirror { background: var(--bg) !important; color: var(--text) !important; }
 .CodeMirror-gutters { background: var(--bg-card) !important; border-right: 1px solid var(--border) !important; }
 .CodeMirror-linenumber { color: var(--text-muted) !important; }
-.CodeMirror-selected { background: #2d5a8c !important; }
-.CodeMirror-focused .CodeMirror-selected { background: #3d7ab8 !important; }
-.CodeMirror ::selection { background: #3d7ab8 !important; }
-.CodeMirror ::-moz-selection { background: #3d7ab8 !important; }
+.CodeMirror-selected { background: var(--sel-bg-unfocused) !important; }
+.CodeMirror-focused .CodeMirror-selected { background: var(--sel-bg) !important; }
+.CodeMirror ::selection { background: var(--sel-bg) !important; }
+.CodeMirror ::-moz-selection { background: var(--sel-bg) !important; }

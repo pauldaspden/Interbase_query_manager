@@ -19,6 +19,7 @@ document.addEventListener('DOMContentLoaded', () => {
     loadConfig();
     loadHistory();
     loadScriptsList();
+    loadTheme();
 
     // Ctrl+Enter or F6 to execute
     document.addEventListener('keydown', (e) => {
@@ -66,6 +67,46 @@ function initEditor() {
         indentUnit: 2,
         tabSize: 2,
     });
+}
+
+// ── Theme ────────────────────────────────────────────────────────
+function loadTheme() {
+    const theme = localStorage.getItem('theme') || 'dark';
+    applyTheme(theme);
+}
+
+function toggleTheme() {
+    const current = document.documentElement.getAttribute('data-theme') || 'dark';
+    const next = current === 'dark' ? 'light' : 'dark';
+    applyTheme(next);
+    localStorage.setItem('theme', next);
+}
+
+function applyTheme(theme) {
+    document.documentElement.setAttribute('data-theme', theme);
+
+    // Update toggle button text
+    const btn = document.getElementById('themeToggle');
+    if (btn) btn.textContent = theme === 'dark' ? '🌙 Dark' : '☀ Light';
+
+    // Toggle CodeMirror theme stylesheets
+    const darkSheet = document.getElementById('cmDarkTheme');
+    const lightSheet = document.getElementById('cmLightTheme');
+    if (theme === 'light') {
+        if (darkSheet) darkSheet.disabled = true;
+        if (lightSheet) lightSheet.disabled = false;
+    } else {
+        if (darkSheet) darkSheet.disabled = false;
+        if (lightSheet) lightSheet.disabled = true;
+    }
+
+    // Re-apply CodeMirror theme to editors
+    if (state.editor) {
+        state.editor.setOption('theme', theme === 'light' ? 'default' : 'material-darker');
+    }
+    if (state.multiEditor) {
+        state.multiEditor.setOption('theme', theme === 'light' ? 'default' : 'material-darker');
+    }
 }
 
 // ── API helpers ──────────────────────────────────────────────────
