@@ -310,6 +310,7 @@ body {
 .results-table tr:hover td { background: var(--bg-hover); }
 .results-table .null-val { color: var(--text-muted); font-style: italic; }
 .results-table .num-val { color: #ffcb6b; font-family: var(--mono); }
+.results-table .date-val { color: #82b1ff; font-family: var(--mono); white-space: nowrap; }
 
 /* ═══ Right Sidebar — Metadata ═══ */
 .metadata-sidebar {

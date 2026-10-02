@@ -521,7 +521,24 @@ function formatCell(v) {
     if (v === null || v === undefined) return '<span class="null-val">NULL</span>';
     if (typeof v === 'number') return `<span class="num-val">${v}</span>`;
     if (typeof v === 'boolean') return v ? 'true' : 'false';
-    if (typeof v === 'string' && v.length > 200) v = v.substring(0, 200) + '…';
+    if (typeof v === 'string') {
+        // Detect ISO date/datetime from Python's isoformat()
+        // Pure date: "2026-03-15" (10 chars, no time part)
+        // Datetime:  "2026-03-15T14:30:00" or "2026-03-15T14:30:00.123456"
+        if (/^\d{4}-\d{2}-\d{2}$/.test(v)) {
+            // Pure DATE — render as DD-MM-YYYY
+            const [y, m, d] = v.split('-');
+            return `<span class="date-val">${d}-${m}-${y}</span>`;
+        }
+        if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(v)) {
+            // DATETIME/TIMESTAMP — render as DD-MM-YYYY HH:MM:SS (24hr)
+            const [datePart, timePart] = v.split('T');
+            const [y, m, d] = datePart.split('-');
+            const time = timePart.split('.')[0]; // strip microseconds
+            return `<span class="date-val">${d}-${m}-${y} ${time}</span>`;
+        }
+        if (v.length > 200) v = v.substring(0, 200) + '…';
+    }
     return esc(String(v));
 }
 
