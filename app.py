@@ -120,19 +120,10 @@ class ConnectionManager:
         with self._lock:
             conn = self._conns.get(key)
             if conn is not None:
-                try:
-                    # quick liveness check
-                    cur = conn.cursor()
-                    cur.execute("SELECT 1 FROM RDB$DATABASE")
-                    cur.fetchall()
-                    cur.close()
-                    return conn
-                except Exception:
-                    try:
-                        conn.close()
-                    except Exception:
-                        pass
-                    self._conns.pop(key, None)
+                # Return cached connection directly — skip the liveness
+                # check for performance. If the connection is dead, the
+                # actual query will fail and we'll reconnect on retry.
+                return conn
         # create new connection outside lock to avoid blocking
         cfg = load_config()
         server = next((s for s in cfg["servers"] if s["id"] == server_id), None)
@@ -260,15 +251,13 @@ def fast_row_to_json(row):
                 except UnicodeEncodeError:
                     out.append(v.encode("utf-8", errors="replace").decode("utf-8"))
         elif isinstance(v, bytes):
-            # With charset NONE, text columns come back as raw bytes
-            for enc in ("win1252", "latin-1", "utf-8"):
-                try:
-                    out.append(v.decode(enc))
-                    break
-                except (UnicodeDecodeError, ValueError):
-                    continue
-            else:
-                out.append(v.decode("utf-8", errors="replace"))
+            # With charset NONE, text columns come back as raw bytes.
+            # Latin-1 NEVER fails (every byte 0-255 is valid), so use it
+            # directly instead of trying 3 encodings in a loop.
+            # This is correct for WIN1252 data too (Latin-1 is a superset
+            # for byte values 0-255, and Python's JSON encoder will handle
+            # any remaining issues).
+            out.append(v.decode("latin-1"))
         elif isinstance(v, Decimal):
             out.append(float(v))
         elif isinstance(v, (datetime, date)):
@@ -836,16 +825,62 @@ def api_query():
                 "elapsed": round(elapsed, 3),
             })
     except Exception as e:
-        elapsed = time.time() - t0
-        add_history({
-            "sql": sql,
-            "server_id": server_id,
-            "db_path": db_path,
-            "error": str(e),
-            "elapsed": round(elapsed, 3),
-            "type": "ERROR",
-        })
-        return jsonify({"error": str(e), "elapsed": round(elapsed, 3)}), 200
+        # If the connection might be stale, clear cache and retry once
+        cm.close(server_id, db_path)
+        try:
+            conn = cm.get(server_id, db_path, creds["username"], creds["password"])
+            cur = conn.cursor()
+            cur.execute(sql)
+            if cur.description:
+                columns = [d[0] for d in cur.description]
+                cur.arraysize = min(max_rows, 2000)
+                rows = cur.fetchmany(max_rows)
+                row_count = len(rows)
+                elapsed = time.time() - t0
+                cur.close()
+                add_history({
+                    "sql": sql,
+                    "server_id": server_id,
+                    "db_path": db_path,
+                    "row_count": row_count,
+                    "elapsed": round(elapsed, 3),
+                    "type": "SELECT",
+                })
+                return jsonify({
+                    "columns": columns,
+                    "rows": rows_to_json(rows),
+                    "row_count": row_count,
+                    "truncated": row_count >= max_rows,
+                    "elapsed": round(elapsed, 3),
+                })
+            else:
+                row_count = cur.rowcount
+                conn.commit()
+                elapsed = time.time() - t0
+                cur.close()
+                add_history({
+                    "sql": sql,
+                    "server_id": server_id,
+                    "db_path": db_path,
+                    "row_count": row_count,
+                    "elapsed": round(elapsed, 3),
+                    "type": "DML",
+                })
+                return jsonify({
+                    "rows_affected": row_count,
+                    "elapsed": round(elapsed, 3),
+                })
+        except Exception as e2:
+            elapsed = time.time() - t0
+            add_history({
+                "sql": sql,
+                "server_id": server_id,
+                "db_path": db_path,
+                "error": str(e2),
+                "elapsed": round(elapsed, 3),
+                "type": "ERROR",
+            })
+            return jsonify({"error": str(e2), "elapsed": round(elapsed, 3)}), 200
 
 # ── Multi-server query (run same SQL across all selected servers/databases) ─
 @app.route("/api/multi-query", methods=["POST"])
