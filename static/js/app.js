@@ -20,6 +20,10 @@ document.addEventListener('DOMContentLoaded', () => {
     loadHistory();
     loadScriptsList();
     loadTheme();
+    // Transaction mode is on by default
+    state.inTransaction = true;
+    document.getElementById('btnCommit').style.display = '';
+    document.getElementById('btnRollback').style.display = '';
 
     // Ctrl+Enter or F6 to execute
     document.addEventListener('keydown', (e) => {
