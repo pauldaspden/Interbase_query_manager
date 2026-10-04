@@ -659,6 +659,16 @@ body {
 .loading { color: var(--primary); }
 .error-msg { color: var(--error); font-family: var(--mono); font-size: 12px; padding: 10px; }
 .hint-label { font-size: 11px; color: var(--text-muted); font-style: italic; }
+.tx-mode-label {
+    display: flex; align-items: center; gap: 5px;
+    font-size: 12px; color: var(--text-dim); cursor: pointer; white-space: nowrap;
+}
+.tx-mode-label input { accent-color: var(--primary); }
+.btn-tx {
+    background: var(--success); color: #fff; border-color: var(--success);
+    font-weight: 600;
+}
+.btn-tx:hover { filter: brightness(1.1); }
 
 .results-pagination {
     display: flex;

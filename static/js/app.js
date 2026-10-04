@@ -489,6 +489,7 @@ async function runQuery() {
     showLoading(isSelection ? 'Executing selected query…' : 'Executing…');
 
     try {
+        const inTxMode = document.getElementById('txModeToggle').checked;
         const res = await api('/api/query', {
             method: 'POST',
             body: JSON.stringify({
@@ -496,18 +497,77 @@ async function runQuery() {
                 db_path: state.currentDb,
                 sql: sql,
                 max_rows: maxRows,
+                in_transaction: inTxMode,
             }),
         });
         if (res.error) {
             showResultError(res.error, res.elapsed);
         } else if (res.rows_affected !== undefined) {
-            showDmlResult(res.rows_affected, res.elapsed);
+            const txNote = res.in_transaction ? ' <span style="color:var(--warning)">(uncommitted — click Commit to save)</span>' : '';
+            showDmlResult(res.rows_affected + txNote, res.elapsed);
         } else {
             renderResults(res, `${res.row_count} rows`);
         }
         loadHistory();
     } catch (e) {
         showResultError(e.message);
+    }
+}
+
+// ── Transaction mode ─────────────────────────────────────────────
+function toggleTxMode() {
+    const checked = document.getElementById('txModeToggle').checked;
+    document.getElementById('btnCommit').style.display = checked ? '' : 'none';
+    document.getElementById('btnRollback').style.display = checked ? '' : 'none';
+    if (checked) {
+        state.inTransaction = true;
+    } else {
+        state.inTransaction = false;
+    }
+}
+
+async function commitTransaction() {
+    if (!state.currentServer || !state.currentDb) return;
+    try {
+        const res = await api('/api/commit', {
+            method: 'POST',
+            body: JSON.stringify({
+                server_id: state.currentServer,
+                db_path: state.currentDb,
+            }),
+        });
+        if (res.ok) {
+            alert('✅ Changes committed successfully');
+            document.getElementById('txModeToggle').checked = false;
+            toggleTxMode();
+        } else {
+            alert('Commit failed: ' + (res.error || 'Unknown error'));
+        }
+    } catch (e) {
+        alert('Commit failed: ' + e.message);
+    }
+}
+
+async function rollbackTransaction() {
+    if (!state.currentServer || !state.currentDb) return;
+    if (!confirm('Rollback all uncommitted changes? This cannot be undone.')) return;
+    try {
+        const res = await api('/api/rollback', {
+            method: 'POST',
+            body: JSON.stringify({
+                server_id: state.currentServer,
+                db_path: state.currentDb,
+            }),
+        });
+        if (res.ok) {
+            alert('↩ Changes rolled back successfully');
+            document.getElementById('txModeToggle').checked = false;
+            toggleTxMode();
+        } else {
+            alert('Rollback failed: ' + (res.error || 'Unknown error'));
+        }
+    } catch (e) {
+        alert('Rollback failed: ' + e.message);
     }
 }
 

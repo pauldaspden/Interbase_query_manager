@@ -781,6 +781,7 @@ def api_query():
     db_path   = data.get("db_path")
     sql       = data.get("sql", "").strip()
     max_rows  = data.get("max_rows", 1000)
+    in_transaction = data.get("in_transaction", False)  # transaction mode
     cfg = load_config()
     creds = cfg.get("credentials", {})
     if not sql:
@@ -790,14 +791,19 @@ def api_query():
     except Exception as e:
         return jsonify({"error": f"Connection failed: {e}"}), 500
 
+    # In transaction mode, set autocommit off so changes can be rolled back.
+    # In normal mode, autocommit is on and changes are committed immediately.
+    if in_transaction:
+        conn.set_autocommit(False)
+    else:
+        conn.set_autocommit(True)
+
     t0 = time.time()
-    try:
+    def _do_execute(conn):
         cur = conn.cursor()
         cur.execute(sql)
-        # Check if this is a SELECT-like query that returns rows
         if cur.description:
             columns = [d[0] for d in cur.description]
-            # Increase fetch batch size for better performance with large result sets
             cur.arraysize = min(max_rows, 2000)
             rows = cur.fetchmany(max_rows)
             row_count = len(rows)
@@ -817,10 +823,15 @@ def api_query():
                 "row_count": row_count,
                 "truncated": row_count >= max_rows,
                 "elapsed": round(elapsed, 3),
+                "in_transaction": in_transaction,
             })
         else:
             row_count = cur.rowcount
-            conn.commit()
+            # Only commit if NOT in transaction mode.
+            # In transaction mode, changes stay uncommitted until
+            # the user clicks Commit or Rollback.
+            if not in_transaction:
+                conn.commit()
             elapsed = time.time() - t0
             cur.close()
             add_history({
@@ -834,53 +845,22 @@ def api_query():
             return jsonify({
                 "rows_affected": row_count,
                 "elapsed": round(elapsed, 3),
+                "in_transaction": in_transaction,
+                "uncommitted": in_transaction,
             })
+
+    try:
+        return _do_execute(conn)
     except Exception as e:
         # If the connection might be stale, clear cache and retry once
         cm.close(server_id, db_path)
         try:
             conn = cm.get(server_id, db_path, creds["username"], creds["password"])
-            cur = conn.cursor()
-            cur.execute(sql)
-            if cur.description:
-                columns = [d[0] for d in cur.description]
-                cur.arraysize = min(max_rows, 2000)
-                rows = cur.fetchmany(max_rows)
-                row_count = len(rows)
-                elapsed = time.time() - t0
-                cur.close()
-                add_history({
-                    "sql": sql,
-                    "server_id": server_id,
-                    "db_path": db_path,
-                    "row_count": row_count,
-                    "elapsed": round(elapsed, 3),
-                    "type": "SELECT",
-                })
-                return jsonify({
-                    "columns": columns,
-                    "rows": rows_to_json(rows),
-                    "row_count": row_count,
-                    "truncated": row_count >= max_rows,
-                    "elapsed": round(elapsed, 3),
-                })
+            if in_transaction:
+                conn.set_autocommit(False)
             else:
-                row_count = cur.rowcount
-                conn.commit()
-                elapsed = time.time() - t0
-                cur.close()
-                add_history({
-                    "sql": sql,
-                    "server_id": server_id,
-                    "db_path": db_path,
-                    "row_count": row_count,
-                    "elapsed": round(elapsed, 3),
-                    "type": "DML",
-                })
-                return jsonify({
-                    "rows_affected": row_count,
-                    "elapsed": round(elapsed, 3),
-                })
+                conn.set_autocommit(True)
+            return _do_execute(conn)
         except Exception as e2:
             elapsed = time.time() - t0
             add_history({
@@ -892,6 +872,40 @@ def api_query():
                 "type": "ERROR",
             })
             return jsonify({"error": str(e2), "elapsed": round(elapsed, 3)}), 200
+
+
+@app.route("/api/commit", methods=["POST"])
+def api_commit():
+    """Commit the current transaction."""
+    data = request.get_json()
+    server_id = data.get("server_id")
+    db_path   = data.get("db_path")
+    cfg = load_config()
+    creds = cfg.get("credentials", {})
+    try:
+        conn = cm.get(server_id, db_path, creds["username"], creds["password"])
+        conn.commit()
+        conn.set_autocommit(True)  # back to normal mode
+        return jsonify({"ok": True, "message": "Changes committed successfully"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/rollback", methods=["POST"])
+def api_rollback():
+    """Rollback the current transaction — undo all uncommitted changes."""
+    data = request.get_json()
+    server_id = data.get("server_id")
+    db_path   = data.get("db_path")
+    cfg = load_config()
+    creds = cfg.get("credentials", {})
+    try:
+        conn = cm.get(server_id, db_path, creds["username"], creds["password"])
+        conn.rollback()
+        conn.set_autocommit(True)  # back to normal mode
+        return jsonify({"ok": True, "message": "Changes rolled back successfully"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 # ── Multi-server query (run same SQL across all selected servers/databases) ─
 @app.route("/api/multi-query", methods=["POST"])
