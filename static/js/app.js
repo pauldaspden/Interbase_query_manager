@@ -701,7 +701,7 @@ function renderResultsPage() {
 
     // Build table with draggable column headers
     const headers = colOrder.map((colIdx, displayIdx) => {
-        return `<th draggable="true" data-col-idx="${colIdx}" data-display-idx="${displayIdx}" onclick="sortTable(this, ${colIdx})">${esc(s.columns[colIdx])}</th>`;
+        return `<th draggable="true" data-col-idx="${colIdx}" data-display-idx="${displayIdx}">${esc(s.columns[colIdx])}</th>`;
     }).join('');
 
     const bodyRows = pageRows.map(row =>
@@ -729,12 +729,16 @@ function renderResultsPage() {
 function initColumnDrag() {
     const ths = document.querySelectorAll('.results-table th[draggable]');
     let dragSrc = null;
+    let didDrag = false;
 
     ths.forEach(th => {
         th.addEventListener('dragstart', (e) => {
             dragSrc = th;
+            didDrag = true;
             th.style.opacity = '0.5';
             e.dataTransfer.effectAllowed = 'move';
+            // Set some drag data (required by some browsers)
+            e.dataTransfer.setData('text/plain', th.dataset.colIdx);
         });
 
         th.addEventListener('dragend', (e) => {
@@ -742,6 +746,8 @@ function initColumnDrag() {
             document.querySelectorAll('.results-table th').forEach(t => {
                 t.style.borderLeft = '';
             });
+            // Reset didDrag after a short delay so click handler can check it
+            setTimeout(() => { didDrag = false; }, 50);
         });
 
         th.addEventListener('dragover', (e) => {
@@ -777,8 +783,14 @@ function initColumnDrag() {
             s.colOrder.splice(target, 0, fromIdx);
 
             // Re-render
-            s.page = s.page; // keep same page
             renderResultsPage();
+        });
+
+        // Click to sort — but only if no drag happened
+        th.addEventListener('click', (e) => {
+            if (didDrag) return;  // ignore click after drag
+            const colIdx = parseInt(th.dataset.colIdx);
+            sortTable(th, colIdx);
         });
     });
 }
