@@ -319,6 +319,16 @@ body {
 
 .editor-wrap { flex-shrink: 0; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
 .editor-wrap .CodeMirror { height: 240px !important; font-size: 14px; }
+.editor-resize-handle {
+    height: 8px;
+    background: var(--border);
+    cursor: ns-resize;
+    flex-shrink: 0;
+    transition: background .15s;
+}
+.editor-resize-handle:hover {
+    background: var(--primary);
+}
 
 /* ═══ Results ═══ */
 .results-panel {
@@ -358,6 +368,13 @@ body {
     position: sticky; top: 0;
     white-space: nowrap;
     cursor: pointer;
+    user-select: none;
+}
+.results-table th:hover {
+    background: var(--bg-hover);
+}
+.results-table th:active {
+    cursor: grabbing;
 }
 .results-table td {
     padding: 6px 12px;

@@ -71,6 +71,47 @@ function initEditor() {
         indentUnit: 2,
         tabSize: 2,
     });
+
+    // Editor resize handle
+    initEditorResize();
+}
+
+function initEditorResize() {
+    const handle = document.getElementById('editorResizeHandle');
+    if (!handle) return;
+    let startY = 0;
+    let startH = 0;
+
+    handle.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        startY = e.clientY;
+        const cm = state.editor;
+        if (cm) {
+            startH = parseInt(cm.getWrapperElement().style.height) || 240;
+        }
+        document.body.style.cursor = 'ns-resize';
+        document.body.style.userSelect = 'none';
+
+        const onMove = (e) => {
+            const delta = e.clientY - startY;
+            const newH = Math.max(80, Math.min(startH + delta, window.innerHeight - 200));
+            const wrap = state.editor.getWrapperElement();
+            if (wrap) {
+                wrap.style.height = newH + 'px';
+                state.editor.refresh();
+            }
+        };
+
+        const onUp = () => {
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+        };
+
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+    });
 }
 
 // ── Theme ────────────────────────────────────────────────────────
@@ -621,6 +662,7 @@ function renderResults(res, label) {
     resultsState.label = label;
     resultsState.truncated = res.truncated || false;
     resultsState.elapsed = res.elapsed || 0;
+    resultsState.colOrder = null;  // reset column order
     renderResultsPage();
 }
 
@@ -632,6 +674,9 @@ function renderResultsPage() {
     const startIdx = s.page * s.pageSize;
     const endIdx = Math.min(startIdx + s.pageSize, s.allRows.length);
     const pageRows = s.allRows.slice(startIdx, endIdx);
+
+    // Column order — use colOrder if set (after drag), otherwise original
+    const colOrder = s.colOrder || s.columns.map((_, i) => i);
 
     const truncated = s.truncated ? ' <span style="color:var(--warning)">(truncated)</span>' : '';
     const pageInfo = totalPages > 1
@@ -654,6 +699,15 @@ function renderResultsPage() {
         `;
     }
 
+    // Build table with draggable column headers
+    const headers = colOrder.map((colIdx, displayIdx) => {
+        return `<th draggable="true" data-col-idx="${colIdx}" data-display-idx="${displayIdx}" onclick="sortTable(this, ${colIdx})">${esc(s.columns[colIdx])}</th>`;
+    }).join('');
+
+    const bodyRows = pageRows.map(row =>
+        `<tr>${colOrder.map(colIdx => `<td>${formatCell(row[colIdx])}</td>`).join('')}</tr>`
+    ).join('');
+
     panel.innerHTML = `
         <div class="results-header">
             <span class="results-info">${s.label}${truncated} — ${s.columns.length} columns, ${s.allRows.length} rows${pageInfo}</span>
@@ -662,15 +716,71 @@ function renderResultsPage() {
         ${pagination}
         <div class="results-table-wrap">
             <table class="results-table">
-                <thead><tr>${s.columns.map((c, i) => `<th onclick="sortTable(this, ${i})">${esc(c)}</th>`).join('')}</tr></thead>
-                <tbody>
-                    ${pageRows.map(row =>
-                        `<tr>${row.map(v => `<td>${formatCell(v)}</td>`).join('')}</tr>`
-                    ).join('')}
-                </tbody>
+                <thead><tr>${headers}</tr></thead>
+                <tbody>${bodyRows}</tbody>
             </table>
         </div>
     `;
+
+    // Attach drag handlers to column headers
+    initColumnDrag();
+}
+
+function initColumnDrag() {
+    const ths = document.querySelectorAll('.results-table th[draggable]');
+    let dragSrc = null;
+
+    ths.forEach(th => {
+        th.addEventListener('dragstart', (e) => {
+            dragSrc = th;
+            th.style.opacity = '0.5';
+            e.dataTransfer.effectAllowed = 'move';
+        });
+
+        th.addEventListener('dragend', (e) => {
+            th.style.opacity = '';
+            document.querySelectorAll('.results-table th').forEach(t => {
+                t.style.borderLeft = '';
+            });
+        });
+
+        th.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            if (th !== dragSrc) {
+                th.style.borderLeft = '2px solid var(--primary)';
+            }
+        });
+
+        th.addEventListener('dragleave', (e) => {
+            th.style.borderLeft = '';
+        });
+
+        th.addEventListener('drop', (e) => {
+            e.preventDefault();
+            th.style.borderLeft = '';
+            if (!dragSrc || th === dragSrc) return;
+
+            // Reorder columns
+            const fromIdx = parseInt(dragSrc.dataset.colIdx);
+            const toIdx = parseInt(th.dataset.colIdx);
+
+            const s = resultsState;
+            if (!s.colOrder) {
+                s.colOrder = s.columns.map((_, i) => i);
+            }
+
+            // Move the dragged column to the target position
+            const moved = s.colOrder.indexOf(fromIdx);
+            const target = s.colOrder.indexOf(toIdx);
+            s.colOrder.splice(moved, 1);
+            s.colOrder.splice(target, 0, fromIdx);
+
+            // Re-render
+            s.page = s.page; // keep same page
+            renderResultsPage();
+        });
+    });
 }
 
 function resultsPage(dir) {
