@@ -318,7 +318,7 @@ body {
 }
 
 .editor-wrap { flex-shrink: 0; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
-.editor-wrap .CodeMirror { height: 240px !important; font-size: 14px; }
+.editor-wrap .CodeMirror { height: 240px; font-size: 14px; }
 .editor-resize-handle {
     height: 8px;
     background: var(--border);

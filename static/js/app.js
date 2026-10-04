@@ -85,21 +85,18 @@ function initEditorResize() {
     handle.addEventListener('mousedown', (e) => {
         e.preventDefault();
         startY = e.clientY;
-        const cm = state.editor;
-        if (cm) {
-            startH = parseInt(cm.getWrapperElement().style.height) || 240;
-        }
+        // Get current editor height from the CodeMirror wrapper
+        const wrap = state.editor.getWrapperElement();
+        startH = wrap.offsetHeight || 240;
+
         document.body.style.cursor = 'ns-resize';
         document.body.style.userSelect = 'none';
 
         const onMove = (e) => {
             const delta = e.clientY - startY;
             const newH = Math.max(80, Math.min(startH + delta, window.innerHeight - 200));
-            const wrap = state.editor.getWrapperElement();
-            if (wrap) {
-                wrap.style.height = newH + 'px';
-                state.editor.refresh();
-            }
+            // Use CodeMirror's setSize API — this properly handles internal layout
+            state.editor.setSize(null, newH + 'px');
         };
 
         const onUp = () => {
