@@ -43,35 +43,70 @@ HISTORY_PATH   = os.path.join(BASE_DIR, "saved", "history.json")
 os.makedirs(SAVED_DIR, exist_ok=True)
 
 # ── Authentication ─────────────────────────────────────────────────────────
+# Authentication uses the members_ table in PAYOFFICE.IB on PIDB08.
+# Columns: USERNAME, PASSWD
+
+AUTH_HOST = "10.100.5.18"  # PIDB08
+AUTH_DB_PATH = r"e:\Databases\MyPO\PAYOFFICE.IB"
+
+# Fallback admin user (for when the database is unreachable)
 USERS_PATH = os.path.join(BASE_DIR, "users.json")
 
-def load_users():
-    if not os.path.exists(USERS_PATH):
-        # Create default users file with HD_ prefix
-        default = {
-            "users": [
-                {"username": "hd_paul.a", "password_hash": hash_password("changeme"), "name": "Paul Aspden", "admin": True},
-            ]
-        }
-        with open(USERS_PATH, "w") as f:
-            json.dump(default, f, indent=4)
-        return default
-    with open(USERS_PATH, "r") as f:
-        return json.load(f)
+def _get_auth_conn():
+    """Get a connection to the PAYOFFICE.IB auth database on PIDB08."""
+    cfg = load_config()
+    creds = cfg.get("credentials", {})
+    # Find the server by host IP
+    server = None
+    for s in cfg.get("servers", []):
+        if s.get("host") == AUTH_HOST:
+            server = s
+            break
+    if not server:
+        raise RuntimeError(f"Auth server {AUTH_HOST} not found in config")
+    return cm.get(server["id"], AUTH_DB_PATH, creds.get("username", "SYSDBA"), creds.get("password", "masterkey"))
 
 def hash_password(pw):
     return hashlib.sha256(pw.encode("utf-8")).hexdigest()
 
-def save_users(users):
-    with open(USERS_PATH, "w") as f:
-        json.dump(users, f, indent=4)
-
 def check_login(username, password):
-    users = load_users()
-    for u in users.get("users", []):
-        if u["username"].lower() == username.lower():
-            if u["password_hash"] == hash_password(password):
-                return u
+    """Authenticate against the members_ table in PAYOFFICE.IB on PIDB08.
+    Falls back to local users.json if the database is unreachable.
+    """
+    # Try database authentication first
+    if firebirdsql is not None:
+        try:
+            conn = _get_auth_conn()
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT USERNAME, PASSWD FROM MEMBERS_ "
+                "WHERE UPPER(USERNAME) = '" + username.upper().replace("'", "''") + "'"
+            )
+            row = cur.fetchone()
+            cur.close()
+            if row:
+                db_username = row[0].strip() if isinstance(row[0], str) else str(row[0])
+                db_passwd = row[1].strip() if isinstance(row[1], str) else str(row[1])
+                # Compare password (members_ stores plaintext)
+                if db_passwd == password:
+                    return {
+                        "username": db_username,
+                        "name": db_username,
+                        "admin": True,  # all HD_ users are admins
+                    }
+            # User not found or password mismatch
+            return None
+        except Exception:
+            pass  # Fall through to local users
+
+    # Fallback: local users.json (for when PIDB08 is unreachable)
+    if os.path.exists(USERS_PATH):
+        with open(USERS_PATH, "r") as f:
+            users = json.load(f)
+        for u in users.get("users", []):
+            if u["username"].lower() == username.lower():
+                if u["password_hash"] == hash_password(password):
+                    return u
     return None
 
 def get_current_user():
@@ -478,47 +513,85 @@ def api_user():
     return jsonify({"user": None}), 401
 
 # ── User management (admin only) ──────────────────────────────────────────
+@login_required
 @app.route("/api/users", methods=["GET", "POST"])
 def api_users():
     user = get_current_user()
     if not user or not user.get("admin"):
         return jsonify({"error": "Admin access required"}), 403
+
     if request.method == "GET":
-        users = load_users()
-        # Don't return password hashes
-        safe = [{"username": u["username"], "name": u.get("name", ""), "admin": u.get("admin", False)} for u in users.get("users", [])]
-        return jsonify(safe)
+        # List users from members_ table
+        try:
+            conn = _get_auth_conn()
+            cur = conn.cursor()
+            cur.execute("SELECT USERNAME FROM MEMBERS_ ORDER BY USERNAME")
+            users = []
+            for row in cur.fetchall():
+                uname = row[0].strip() if isinstance(row[0], str) else str(row[0])
+                users.append({"username": uname, "name": uname, "admin": True})
+            cur.close()
+            return jsonify(users)
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
     data = request.get_json()
     action = data.get("action")
-    users_data = load_users()
-    if action == "add":
-        new_user = {
-            "username": data.get("username", "").strip(),
-            "password_hash": hash_password(data.get("password", "")),
-            "name": data.get("name", ""),
-            "admin": data.get("admin", False),
-        }
-        if not new_user["username"]:
-            return jsonify({"error": "Username required"}), 400
-        if any(u["username"].lower() == new_user["username"].lower() for u in users_data["users"]):
-            return jsonify({"error": "User already exists"}), 400
-        users_data["users"].append(new_user)
-        save_users(users_data)
-        return jsonify({"ok": True})
-    elif action == "delete":
-        del_user = data.get("username", "").strip()
-        users_data["users"] = [u for u in users_data["users"] if u["username"].lower() != del_user.lower()]
-        save_users(users_data)
-        return jsonify({"ok": True})
-    elif action == "password":
+
+    if action == "password":
+        # Change password in members_ table
         pw_user = data.get("username", "").strip()
         new_pw = data.get("password", "")
-        for u in users_data["users"]:
-            if u["username"].lower() == pw_user.lower():
-                u["password_hash"] = hash_password(new_pw)
-                save_users(users_data)
-                return jsonify({"ok": True})
-        return jsonify({"error": "User not found"}), 404
+        if not pw_user or not new_pw:
+            return jsonify({"error": "Username and password required"}), 400
+        try:
+            conn = _get_auth_conn()
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE MEMBERS_ SET PASSWD = '" + new_pw.replace("'", "''") + "' "
+                "WHERE UPPER(USERNAME) = '" + pw_user.upper().replace("'", "''") + "'"
+            )
+            conn.commit()
+            cur.close()
+            return jsonify({"ok": True})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    if action == "add":
+        # Add user to members_ table
+        new_user = data.get("username", "").strip()
+        new_pw = data.get("password", "")
+        if not new_user or not new_pw:
+            return jsonify({"error": "Username and password required"}), 400
+        try:
+            conn = _get_auth_conn()
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO MEMBERS_ (USERNAME, PASSWD) VALUES ('"
+                + new_user.replace("'", "''") + "', '" + new_pw.replace("'", "''") + "')"
+            )
+            conn.commit()
+            cur.close()
+            return jsonify({"ok": True})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    if action == "delete":
+        del_user = data.get("username", "").strip()
+        if not del_user:
+            return jsonify({"error": "Username required"}), 400
+        try:
+            conn = _get_auth_conn()
+            cur = conn.cursor()
+            cur.execute(
+                "DELETE FROM MEMBERS_ WHERE UPPER(USERNAME) = '" + del_user.upper().replace("'", "''") + "'"
+            )
+            conn.commit()
+            cur.close()
+            return jsonify({"ok": True})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
     return jsonify({"error": "Unknown action"}), 400
 
 # ── Routes ────────────────────────────────────────────────────────────────
