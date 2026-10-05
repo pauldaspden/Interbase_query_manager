@@ -211,7 +211,9 @@ async function loadServers() {
     state.allDbs.sort((a, b) => {
         const an = parseInt(a.company_number) || 999999;
         const bn = parseInt(b.company_number) || 999999;
-        return an - bn;
+        if (an !== bn) return an - bn;
+        // Same company number — sort by name as secondary
+        return (a.name || '').localeCompare(b.name || '');
     });
     renderDbList();
     renderMultiTargets(servers);
