@@ -500,9 +500,10 @@ def auth_debug():
         results["connection"] = f"FAILED: {e}"
         return jsonify(results)
 
+    cur = conn.cursor()
+
     # 2. Does the MEMBERS_ table exist and how many rows?
     try:
-        cur = conn.cursor()
         cur.execute("SELECT COUNT(*) FROM MEMBERS_")
         count = cur.fetchone()[0]
         results["members_count"] = count
@@ -536,6 +537,36 @@ def auth_debug():
         results["columns"] = cols
     except Exception as e:
         results["columns"] = f"ERROR: {e}"
+
+    # 5. If a username is provided, show password format and login_disabled
+    test_user = request.args.get("user", "").strip()
+    if test_user:
+        try:
+            cur.execute(
+                "SELECT USERNAME, PASSWD, LOGIN_DISABLED "
+                "FROM MEMBERS_ "
+                "WHERE UPPER(USERNAME) = '" + test_user.upper().replace("'", "''") + "'"
+            )
+            row = cur.fetchone()
+            if row:
+                uname = row[0].strip() if isinstance(row[0], str) else str(row[0])
+                passwd = row[1] if row[1] is not None else ""
+                if isinstance(passwd, bytes):
+                    passwd = passwd.decode("latin-1")
+                disabled = row[2]
+                # Show password format: first 20 chars + length + whether it looks like a hash
+                passwd_str = str(passwd)
+                results["test_user"] = {
+                    "username": uname,
+                    "passwd_prefix": passwd_str[:20],
+                    "passwd_length": len(passwd_str),
+                    "looks_like_hash": len(passwd_str) >= 32 and all(c in "0123456789abcdefABCDEF" for c in passwd_str),
+                    "login_disabled": disabled,
+                }
+            else:
+                results["test_user"] = f"User '{test_user}' not found in MEMBERS_"
+        except Exception as e:
+            results["test_user"] = f"ERROR: {e}"
 
     cur.close()
     return jsonify(results)
