@@ -14,13 +14,15 @@ import json
 import time
 import uuid
 import threading
+import secrets
+import hashlib
 from datetime import datetime, date
 from decimal import Decimal
 
 # ── vendored deps (zero-install) ──────────────────────────────────────────
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "vendor"))
 
-from flask import Flask, render_template, request, jsonify, Response, stream_with_context
+from flask import Flask, render_template, request, jsonify, Response, stream_with_context, session, redirect, url_for
 
 # firebirdsql speaks the Firebird wire protocol which InterBase understands
 # (InterBase is the ancestor of Firebird; the wire protocol is compatible)
@@ -31,6 +33,97 @@ except ImportError:
 
 app = Flask(__name__)
 app.config["JSON_SORT_KEYS"] = False
+app.secret_key = secrets.token_hex(32)
+
+# ── Paths ─────────────────────────────────────────────────────────────────
+BASE_DIR      = os.path.dirname(os.path.abspath(__file__))
+CONFIG_PATH    = os.path.join(BASE_DIR, "config.json")
+SAVED_DIR      = os.path.join(BASE_DIR, "saved")
+HISTORY_PATH   = os.path.join(BASE_DIR, "saved", "history.json")
+os.makedirs(SAVED_DIR, exist_ok=True)
+
+# ── Authentication ─────────────────────────────────────────────────────────
+USERS_PATH = os.path.join(BASE_DIR, "users.json")
+
+def load_users():
+    if not os.path.exists(USERS_PATH):
+        # Create default users file with HD_ prefix
+        default = {
+            "users": [
+                {"username": "hd_paul.a", "password_hash": hash_password("changeme"), "name": "Paul Aspden", "admin": True},
+            ]
+        }
+        with open(USERS_PATH, "w") as f:
+            json.dump(default, f, indent=4)
+        return default
+    with open(USERS_PATH, "r") as f:
+        return json.load(f)
+
+def hash_password(pw):
+    return hashlib.sha256(pw.encode("utf-8")).hexdigest()
+
+def save_users(users):
+    with open(USERS_PATH, "w") as f:
+        json.dump(users, f, indent=4)
+
+def check_login(username, password):
+    users = load_users()
+    for u in users.get("users", []):
+        if u["username"].lower() == username.lower():
+            if u["password_hash"] == hash_password(password):
+                return u
+    return None
+
+def get_current_user():
+    if "user" not in session:
+        return None
+    return session["user"]
+
+from functools import wraps
+
+def login_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if "user" not in session:
+            if request.is_json or request.path.startswith("/api/"):
+                return jsonify({"error": "Not authenticated"}), 401
+            return redirect("/login")
+        return f(*args, **kwargs)
+    return decorated
+
+# ── Connection idle timeout ───────────────────────────────────────────────
+CONNECTION_IDLE_TIMEOUT = 300  # 5 minutes — drop idle connections
+_connection_last_used = {}  # (server_id, db_path) -> timestamp
+
+def touch_connection(key):
+    _connection_last_used[key] = time.time()
+
+def cleanup_idle_connections():
+    """Drop connections that have been idle for too long."""
+    now = time.time()
+    with cm._lock:
+        stale = [key for key, ts in _connection_last_used.items()
+                 if now - ts > CONNECTION_IDLE_TIMEOUT]
+        for key in stale:
+            conn = cm._conns.pop(key, None)
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            _connection_last_used.pop(key, None)
+
+# Background thread to clean up idle connections every 60 seconds
+def _idle_cleanup_thread():
+    while True:
+        time.sleep(60)
+        try:
+            cleanup_idle_connections()
+        except Exception:
+            pass
+
+_cleanup_thread = threading.Thread(target=_idle_cleanup_thread, daemon=True)
+_cleanup_thread.start()
 
 # ── SQL safety check ──────────────────────────────────────────────────────
 import re as _re
@@ -91,13 +184,6 @@ def is_readonly_sql(sql):
 
     return True
 
-# ── Paths ─────────────────────────────────────────────────────────────────
-BASE_DIR      = os.path.dirname(os.path.abspath(__file__))
-CONFIG_PATH    = os.path.join(BASE_DIR, "config.json")
-SAVED_DIR      = os.path.join(BASE_DIR, "saved")
-HISTORY_PATH   = os.path.join(BASE_DIR, "saved", "history.json")
-os.makedirs(SAVED_DIR, exist_ok=True)
-
 # ── Config ────────────────────────────────────────────────────────────────
 def load_config():
     with open(CONFIG_PATH, "r") as f:
@@ -122,10 +208,9 @@ class ConnectionManager:
             conn = self._conns.get(key)
             if conn is not None:
                 # Quick local check — is the socket still alive?
-                # This doesn't do a network round trip, just checks
-                # if the socket object exists and isn't closed.
                 sock = getattr(conn, 'sock', None)
                 if sock is not None and getattr(sock, '_sock', None) is not None:
+                    touch_connection(key)
                     return conn
                 # Socket is dead — remove from cache and reconnect
                 self._conns.pop(key, None)
@@ -176,6 +261,7 @@ class ConnectionManager:
                 )
                 with self._lock:
                     self._conns[key] = conn
+                touch_connection(key)
                 # Remember which auth method worked for this host
                 self._auth_cache[host] = plugin
                 return conn
@@ -295,14 +381,18 @@ def load_history():
         return []
 
 def save_history(entries):
-    # keep last 200
+    # keep last 1000 entries (per-user history)
     with open(HISTORY_PATH, "w") as f:
-        json.dump(entries[-200:], f, indent=2)
+        json.dump(entries[-1000:], f, indent=2)
 
 def add_history(entry):
     entries = load_history()
     entry["id"] = str(uuid.uuid4())[:8]
     entry["ts"] = datetime.now().isoformat(timespec="seconds")
+    # Record which user ran the query
+    user = get_current_user()
+    entry["user"] = user["username"] if user else "unknown"
+    entry["user_name"] = user.get("name", "") if user else ""
     entries.append(entry)
     save_history(entries)
     return entry
@@ -353,11 +443,92 @@ def delete_script(fn):
     if os.path.exists(fp):
         os.remove(fp)
 
+# ── Login / Logout ────────────────────────────────────────────────────────
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        data = request.get_json() if request.is_json else request.form
+        username = (data.get("username") or "").strip()
+        password = data.get("password") or ""
+        user = check_login(username, password)
+        if user:
+            session["user"] = {
+                "username": user["username"],
+                "name": user.get("name", user["username"]),
+                "admin": user.get("admin", False),
+            }
+            if request.is_json:
+                return jsonify({"ok": True, "user": session["user"]})
+            return redirect("/")
+        if request.is_json:
+            return jsonify({"ok": False, "error": "Invalid username or password"}), 401
+        return render_template("login.html", error="Invalid username or password")
+    return render_template("login.html", error=None)
+
+@app.route("/logout")
+def logout():
+    session.pop("user", None)
+    return redirect("/login")
+
+@app.route("/api/user")
+def api_user():
+    user = get_current_user()
+    if user:
+        return jsonify({"user": user})
+    return jsonify({"user": None}), 401
+
+# ── User management (admin only) ──────────────────────────────────────────
+@app.route("/api/users", methods=["GET", "POST"])
+def api_users():
+    user = get_current_user()
+    if not user or not user.get("admin"):
+        return jsonify({"error": "Admin access required"}), 403
+    if request.method == "GET":
+        users = load_users()
+        # Don't return password hashes
+        safe = [{"username": u["username"], "name": u.get("name", ""), "admin": u.get("admin", False)} for u in users.get("users", [])]
+        return jsonify(safe)
+    data = request.get_json()
+    action = data.get("action")
+    users_data = load_users()
+    if action == "add":
+        new_user = {
+            "username": data.get("username", "").strip(),
+            "password_hash": hash_password(data.get("password", "")),
+            "name": data.get("name", ""),
+            "admin": data.get("admin", False),
+        }
+        if not new_user["username"]:
+            return jsonify({"error": "Username required"}), 400
+        if any(u["username"].lower() == new_user["username"].lower() for u in users_data["users"]):
+            return jsonify({"error": "User already exists"}), 400
+        users_data["users"].append(new_user)
+        save_users(users_data)
+        return jsonify({"ok": True})
+    elif action == "delete":
+        del_user = data.get("username", "").strip()
+        users_data["users"] = [u for u in users_data["users"] if u["username"].lower() != del_user.lower()]
+        save_users(users_data)
+        return jsonify({"ok": True})
+    elif action == "password":
+        pw_user = data.get("username", "").strip()
+        new_pw = data.get("password", "")
+        for u in users_data["users"]:
+            if u["username"].lower() == pw_user.lower():
+                u["password_hash"] = hash_password(new_pw)
+                save_users(users_data)
+                return jsonify({"ok": True})
+        return jsonify({"error": "User not found"}), 404
+    return jsonify({"error": "Unknown action"}), 400
+
 # ── Routes ────────────────────────────────────────────────────────────────
+@login_required
 @app.route("/")
+@login_required
 def index():
     return render_template("index.html")
 
+@login_required
 @app.route("/api/config")
 def api_config():
     cfg = load_config()
@@ -367,6 +538,7 @@ def api_config():
         safe["credentials"]["password"] = "***"
     return jsonify(safe)
 
+@login_required
 @app.route("/api/config", methods=["POST"])
 def api_save_config():
     cfg = request.get_json()
@@ -380,6 +552,7 @@ def api_save_config():
     return jsonify({"ok": False, "error": "No config body"}), 400
 
 # ── Add / delete databases ────────────────────────────────────────────────
+@login_required
 @app.route("/api/servers/<server_id>/databases", methods=["POST"])
 def api_add_database(server_id):
     """Add a database to a server."""
@@ -417,6 +590,7 @@ def api_add_database(server_id):
     save_config(cfg)
     return jsonify({"ok": True, "database": new_db})
 
+@login_required
 @app.route("/api/servers/<server_id>/databases", methods=["DELETE"])
 def api_delete_database(server_id):
     """Delete a database from a server by path."""
@@ -440,6 +614,7 @@ def api_delete_database(server_id):
     save_config(cfg)
     return jsonify({"ok": True, "remaining": len(server["databases"])})
 
+@login_required
 @app.route("/api/servers")
 def api_servers():
     cfg = load_config()
@@ -454,6 +629,7 @@ def api_servers():
         })
     return jsonify(servers)
 
+@login_required
 @app.route("/api/test-connection", methods=["POST"])
 def api_test_connection():
     data = request.get_json()
@@ -488,6 +664,7 @@ def api_test_connection():
         return jsonify({"ok": False, "error": str(e)}), 200
 
 
+@login_required
 @app.route("/api/diagnose-connection", methods=["POST"])
 def api_diagnose_connection():
     """Try each auth method separately and report detailed errors."""
@@ -621,6 +798,7 @@ def api_diagnose_connection():
     })
 
 # ── Metadata ──────────────────────────────────────────────────────────────
+@login_required
 @app.route("/api/metadata/<server_id>")
 def api_metadata(server_id):
     """Return all tables, views, and their columns for a database."""
@@ -733,6 +911,7 @@ def api_metadata(server_id):
     except Exception as e:
         return jsonify({"error": f"Schema query failed: {e}"}), 500
 
+@login_required
 @app.route("/api/table-preview/<server_id>")
 def api_table_preview(server_id):
     """Preview first 100 rows of a table."""
@@ -757,6 +936,7 @@ def api_table_preview(server_id):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@login_required
 @app.route("/api/table-count/<server_id>")
 def api_table_count(server_id):
     db_path = request.args.get("db", "")
@@ -774,6 +954,7 @@ def api_table_count(server_id):
         return jsonify({"error": str(e)}), 500
 
 # ── Query execution ──────────────────────────────────────────────────────
+@login_required
 @app.route("/api/query", methods=["POST"])
 def api_query():
     data = request.get_json()
@@ -874,6 +1055,7 @@ def api_query():
             return jsonify({"error": str(e2), "elapsed": round(elapsed, 3)}), 200
 
 
+@login_required
 @app.route("/api/commit", methods=["POST"])
 def api_commit():
     """Commit the current transaction."""
@@ -891,6 +1073,7 @@ def api_commit():
         return jsonify({"error": str(e)}), 500
 
 
+@login_required
 @app.route("/api/rollback", methods=["POST"])
 def api_rollback():
     """Rollback the current transaction — undo all uncommitted changes."""
@@ -908,21 +1091,21 @@ def api_rollback():
         return jsonify({"error": str(e)}), 500
 
 # ── Multi-server query (run same SQL across all selected servers/databases) ─
+@login_required
 @app.route("/api/multi-query", methods=["POST"])
 def api_multi_query():
     data = request.get_json()
     targets  = data.get("targets", [])   # [{server_id, db_path}, ...]
     sql      = data.get("sql", "").strip()
     max_rows = data.get("max_rows", 500)
+    combine  = data.get("combine", True)  # single result set with server/db columns
+
     if not sql:
         return jsonify({"error": "No SQL provided"}), 400
     if not targets:
         return jsonify({"error": "No targets selected"}), 400
 
     # ── SAFEGUARD: Multi-server mode is SELECT-only ────────────────
-    # Parse the SQL to ensure it's a read-only query. We check for
-    # SELECT and WITH (CTE) as the only allowed leading keywords.
-    # We also reject any DML/DDL keywords found anywhere in the script.
     if not is_readonly_sql(sql):
         return jsonify({
             "error": "Multi-Server mode only allows SELECT queries. "
@@ -932,20 +1115,25 @@ def api_multi_query():
 
     cfg = load_config()
     creds = cfg.get("credentials", {})
-    results = []
+    t0 = time.time()
+
+    # Combined single result set
+    all_columns = None
+    all_rows = []
+    errors = []
+    total_rows = 0
 
     for tgt in targets:
         sid  = tgt["server_id"]
         dpath = tgt["db_path"]
-        entry = {"server_id": sid, "db_path": dpath, "ok": False}
         try:
             server = next((s for s in cfg["servers"] if s["id"] == sid), None)
-            entry["server_name"] = server["name"] if server else sid
-            entry["db_name"] = dpath.split("\\")[-1] if "\\" in dpath else dpath
+            server_name = server["name"] if server else sid
+            db_name = dpath.split("\\")[-1] if "\\" in dpath else dpath
         except Exception:
-            entry["server_name"] = sid
-            entry["db_name"] = dpath
-        t0 = time.time()
+            server_name = sid
+            db_name = dpath
+
         try:
             conn = cm.get(sid, dpath, creds["username"], creds["password"])
             cur = conn.cursor()
@@ -954,42 +1142,74 @@ def api_multi_query():
                 cols = [d[0] for d in cur.description]
                 cur.arraysize = min(max_rows, 2000)
                 rows = cur.fetchmany(max_rows)
-                entry["ok"] = True
-                entry["type"] = "SELECT"
-                entry["columns"] = cols
-                entry["rows"] = rows_to_json(rows)
-                entry["row_count"] = len(rows)
-                entry["truncated"] = len(rows) >= max_rows
-            else:
-                row_count = cur.rowcount
-                conn.commit()
-                entry["ok"] = True
-                entry["type"] = "DML"
-                entry["rows_affected"] = row_count
+                total_rows += len(rows)
+
+                if combine:
+                    # Add server/db columns and combine into single result
+                    if all_columns is None:
+                        all_columns = ["_SERVER", "_DATABASE"] + cols
+                    for row in rows:
+                        safe_row = fast_row_to_json(row)
+                        all_rows.append([server_name, db_name] + safe_row)
+                else:
+                    # Separate results (legacy mode)
+                    if not hasattr(api_multi_query, '_separate'):
+                        api_multi_query._separate = []
+                    api_multi_query._separate.append({
+                        "server_id": sid, "server_name": server_name,
+                        "db_name": db_name, "ok": True, "type": "SELECT",
+                        "columns": cols, "rows": rows_to_json(rows),
+                        "row_count": len(rows),
+                        "truncated": len(rows) >= max_rows,
+                    })
             cur.close()
         except Exception as e:
-            entry["ok"] = False
-            entry["error"] = str(e)
-        entry["elapsed"] = round(time.time() - t0, 3)
-        results.append(entry)
+            errors.append(f"{server_name} / {db_name}: {e}")
 
-    return jsonify({"results": results})
+    elapsed = round(time.time() - t0, 3)
+
+    if combine and all_columns is not None:
+        return jsonify({
+            "columns": all_columns,
+            "rows": all_rows,
+            "row_count": len(all_rows),
+            "truncated": total_rows >= max_rows * len(targets),
+            "elapsed": elapsed,
+            "errors": errors,
+            "targets_run": len(targets),
+        })
+    elif combine and not all_columns:
+        # No results from any target
+        return jsonify({
+            "columns": [],
+            "rows": [],
+            "row_count": 0,
+            "elapsed": elapsed,
+            "errors": errors,
+            "targets_run": len(targets),
+        })
+    else:
+        return jsonify({"results": api_multi_query._separate})
 
 # ── History ──────────────────────────────────────────────────────────────
+@login_required
 @app.route("/api/history")
 def api_history():
     return jsonify(load_history())
 
+@login_required
 @app.route("/api/history", methods=["DELETE"])
 def api_clear_history():
     save_history([])
     return jsonify({"ok": True})
 
 # ── Saved scripts ────────────────────────────────────────────────────────
+@login_required
 @app.route("/api/scripts")
 def api_scripts():
     return jsonify(list_saved_scripts())
 
+@login_required
 @app.route("/api/scripts", methods=["POST"])
 def api_save_script():
     data = request.get_json()
@@ -998,6 +1218,7 @@ def api_save_script():
     fn = save_script(name, sql)
     return jsonify({"ok": True, "filename": fn})
 
+@login_required
 @app.route("/api/scripts/<fn>")
 def api_get_script(fn):
     content = load_script(fn)
@@ -1005,12 +1226,14 @@ def api_get_script(fn):
         return jsonify({"error": "Not found"}), 404
     return jsonify({"filename": fn, "sql": content})
 
+@login_required
 @app.route("/api/scripts/<fn>", methods=["DELETE"])
 def api_del_script(fn):
     delete_script(fn)
     return jsonify({"ok": True})
 
 # ── Export CSV ────────────────────────────────────────────────────────────
+@login_required
 @app.route("/api/export", methods=["POST"])
 def api_export():
     """Execute query and return results as CSV download."""
@@ -1089,12 +1312,101 @@ def api_export():
         except Exception as e2:
             return jsonify({"error": str(e2)}), 500
 
+
+# ── DBScanner integration ─────────────────────────────────────────────────
+import subprocess
+
+@login_required
+@app.route("/api/scan-databases", methods=["POST"])
+def api_scan_databases():
+    """Run DBScanner.ps1 to discover databases via network shares, then
+    update config.json with any new databases found."""
+    user = get_current_user()
+    if not user or not user.get("admin"):
+        return jsonify({"error": "Admin access required"}), 403
+
+    scanner_path = os.path.join(BASE_DIR, "DBScanner.ps1")
+    if not os.path.exists(scanner_path):
+        return jsonify({"error": "DBScanner.ps1 not found"}), 404
+
+    try:
+        # Run DBScanner in mode 1 (Affinity DBs — 4-digit numeric)
+        result = subprocess.run(
+            ["powershell", "-ExecutionPolicy", "Bypass", "-File", scanner_path, "-Mode", "1"],
+            capture_output=True, text=True, timeout=120,
+            cwd=BASE_DIR,
+        )
+        if result.returncode != 0:
+            return jsonify({"error": f"Scanner failed: {result.stderr}"}), 500
+
+        # Parse the output — each line is "SERVER:E:\DATABASES\NNNN\NNNN.IB"
+        lines = result.stdout.strip().split('\n')
+        found = {}
+        for line in lines:
+            line = line.strip()
+            if ':' not in line or 'PIDB' not in line:
+                continue
+            parts = line.split(':', 1)
+            server_name = parts[0].strip()
+            db_path = parts[1].strip()
+            if server_name not in found:
+                found[server_name] = []
+            found[server_name].append(db_path)
+
+        # Map server names to config IDs and add missing databases
+        cfg = load_config()
+        added = []
+        for srv in cfg["servers"]:
+            # Extract PIDB name from host or name
+            srv_host = srv["host"]
+            # Find matching server name from scan results
+            for scan_name, db_paths in found.items():
+                # Match by comparing — we need to check if this server matches
+                # The scan returns PIDB06, PIDB07 etc. The config has host IPs.
+                # We'll match by checking if the server name contains the PIDB name
+                if scan_name in srv.get("name", "") or scan_name in srv.get("host", ""):
+                    existing_paths = set(db["path"].lower() for db in srv["databases"])
+                    for path in db_paths:
+                        if path.lower() not in existing_paths:
+                            db_name = path.split("\\")[-1].replace(".IB", "").replace(".ib", "")
+                            new_db = {
+                                "name": db_name,
+                                "path": path,
+                                "company_number": db_name if db_name.isdigit() else "",
+                            }
+                            srv["databases"].append(new_db)
+                            added.append(f"{srv['name']}: {db_name}")
+
+        if added:
+            # Re-sort by company_number
+            for srv in cfg["servers"]:
+                srv["databases"].sort(
+                    key=lambda d: int(d.get("company_number", "0"))
+                    if str(d.get("company_number", "")).isdigit()
+                    else 0
+                )
+            save_config(cfg)
+
+        return jsonify({
+            "ok": True,
+            "found": sum(len(v) for v in found.values()),
+            "added": added,
+            "added_count": len(added),
+        })
+    except subprocess.TimeoutExpired:
+        return jsonify({"error": "Scanner timed out (120s)"}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 # ── Shutdown / Restart ───────────────────────────────────────────────────
+@login_required
 @app.route("/api/shutdown", methods=["POST"])
 def api_shutdown():
     cm.close_all()
     return jsonify({"ok": True})
 
+@login_required
 @app.route("/api/restart", methods=["POST"])
 def api_restart():
     """Restart the Flask server.
@@ -1139,4 +1451,4 @@ if __name__ == "__main__":
     print("  Open http://localhost:5000 in your browser")
     print("  Press Ctrl+C to stop")
     print("=" * 60)
-    app.run(host="127.0.0.1", port=5000, debug=False)
+    app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)

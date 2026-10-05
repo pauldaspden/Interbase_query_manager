@@ -28,11 +28,13 @@
         <h1>InterBase Query Manager</h1>
     </div>
     <div class="topbar-right">
+        <span id="userDisplay" class="user-display"></span>
         <button class="btn btn-ghost" id="themeToggle" onclick="toggleTheme()">🌙 Dark</button>
         <button class="btn btn-ghost" onclick="openSettings()">⚙ Settings</button>
         <button class="btn btn-ghost" onclick="testCurrentConnection()">🔌 Test Connection</button>
         <button class="btn btn-ghost" onclick="diagnoseConnection()">🔬 Diagnose</button>
         <button class="btn btn-ghost" onclick="restartServer()">↻ Restart Server</button>
+        <button class="btn btn-ghost" onclick="logout()">🚪 Logout</button>
     </div>
 </header>
 
@@ -196,6 +198,7 @@
             <h3>Servers</h3>
             <div id="serversConfig"></div>
             <button class="btn btn-small" onclick="addServerConfig()">+ Add Server</button>
+            <button class="btn btn-small btn-secondary" onclick="scanDatabases()">🔍 Scan for New Databases</button>
             <h3>General</h3>
             <label>Max rows (default): <input type="number" id="setMaxRows" class="modal-input" style="width:120px"></label>
             <label>Query timeout (sec): <input type="number" id="setQueryTimeout" class="modal-input" style="width:120px"></label>

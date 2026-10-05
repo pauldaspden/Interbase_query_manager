@@ -24,6 +24,7 @@ document.addEventListener('DOMContentLoaded', () => {
     state.inTransaction = true;
     document.getElementById('btnCommit').style.display = '';
     document.getElementById('btnRollback').style.display = '';
+    loadUserInfo();
 
     // Ctrl+Enter or F6 to execute
     document.addEventListener('keydown', (e) => {
@@ -157,16 +158,37 @@ async function api(url, opts = {}) {
         ...opts,
         headers: { 'Content-Type': 'application/json', ...opts.headers },
     });
-    // Handle non-JSON responses (e.g. Flask HTML error pages)
+    // Handle 401 — redirect to login
+    if (res.status === 401) {
+        window.location.href = '/login';
+        return;
+    }
     const contentType = res.headers.get('content-type') || '';
     if (!contentType.includes('application/json')) {
         const text = await res.text();
-        // Try to extract the error from HTML
         const match = text.match(/<title>(.*?)<\/title>/i);
         const errTitle = match ? match[1] : `HTTP ${res.status}`;
-        throw new Error(`${errTitle} — server returned HTML instead of JSON. Check if the database connection is working.`);
+        throw new Error(`${errTitle} — server returned HTML instead of JSON.`);
     }
     return res.json();
+}
+
+// ── Auth ─────────────────────────────────────────────────────────
+async function loadUserInfo() {
+    try {
+        const res = await fetch('/api/user');
+        if (res.ok) {
+            const data = await res.json();
+            if (data.user) {
+                const el = document.getElementById('userDisplay');
+                if (el) el.textContent = `👤 ${data.user.name || data.user.username}`;
+            }
+        }
+    } catch (e) {}
+}
+
+async function logout() {
+    window.location.href = '/logout';
 }
 
 // ── Servers ──────────────────────────────────────────────────────
@@ -941,16 +963,65 @@ async function runMultiQuery() {
     try {
         const res = await api('/api/multi-query', {
             method: 'POST',
-            body: JSON.stringify({ targets, sql, max_rows: maxRows }),
+            body: JSON.stringify({ targets, sql, max_rows: maxRows, combine: true }),
         });
         if (res.error) {
             resDiv.innerHTML = `<div class="error-msg" style="margin-top:12px">${esc(res.error)}</div>`;
             return;
         }
-        renderMultiResults(res.results);
+        // Render combined single result set with _SERVER and _DATABASE columns
+        if (res.columns && res.columns.length > 0) {
+            resDiv.innerHTML = `
+                <div class="results-header">
+                    <span class="results-info">
+                        ${res.row_count} rows from ${res.targets_run} databases — ${res.columns.length} columns
+                        ${res.truncated ? ' <span style="color:var(--warning)">(truncated)</span>' : ''}
+                    </span>
+                    <span class="results-timer">${res.elapsed}s</span>
+                </div>
+                ${res.errors && res.errors.length > 0 ? `<div class="error-msg" style="margin:8px 0">${res.errors.map(e => esc(e)).join('<br>')}</div>` : ''}
+                <div class="results-table-wrap" style="max-height:400px">
+                    <table class="results-table">
+                        <thead><tr>${res.columns.map((c, i) => `<th data-col-idx="${i}" draggable="true">${esc(c)}</th>`).join('')}</tr></thead>
+                        <tbody>
+                            ${res.rows.map(row => `<tr>${row.map(v => `<td>${formatCell(v)}</td>`).join('')}</tr>`).join('')}
+                        </tbody>
+                    </table>
+                </div>
+                <button class="btn btn-small" style="margin-top:8px" onclick="exportMultiCsv(${JSON.stringify(res).replace(/"/g, '&quot;')})">⬇ Export CSV</button>
+            `;
+        } else if (res.errors && res.errors.length > 0) {
+            resDiv.innerHTML = `<div class="error-msg">${res.errors.map(e => esc(e)).join('<br>')}</div>`;
+        } else {
+            resDiv.innerHTML = '<p class="muted">No results returned.</p>';
+        }
     } catch (e) {
         resDiv.innerHTML = `<p class="error-msg">${esc(e.message)}</p>`;
     }
+}
+
+function exportMultiCsv(data) {
+    // Export combined multi-query results as CSV
+    let csv = data.columns.join(',') + '\n';
+    for (const row of data.rows) {
+        csv += row.map(v => {
+            if (v === null || v === undefined) return '';
+            const s = String(v);
+            if (s.includes(',') || s.includes('"') || s.includes('\n')) {
+                return '"' + s.replace(/"/g, '""') + '"';
+            }
+            return s;
+        }).join(',') + '\n';
+    }
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const now = new Date();
+    const ts = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}_${String(now.getHours()).padStart(2,'0')}${String(now.getMinutes()).padStart(2,'0')}`;
+    a.download = `multi_query_${ts}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
 }
 
 // ── SELECT-only check (frontend) ─────────────────────────────────
@@ -1099,9 +1170,11 @@ function renderHistory(history) {
         const meta = h.error
             ? `<span class="err">error</span>`
             : `<span class="ok">${h.row_count !== undefined ? h.row_count + ' rows' : h.rows_affected + ' affected'}</span> · ${h.elapsed}s`;
+        const userTag = h.user ? `<span class="hi-user">${esc(h.user)}</span>` : '';
         return `
             <div class="history-item">
                 <span class="hi-time">${esc(h.ts)}</span>
+                ${userTag}
                 <span class="hi-sql">${esc(h.sql.substring(0, 200))}</span>
                 <span class="hi-meta">${meta}</span>
                 <span class="hi-actions">
@@ -1347,6 +1420,36 @@ async function saveSettings() {
 
 function closeSettings() {
     document.getElementById('settingsModal').style.display = 'none';
+}
+
+async function scanDatabases() {
+    if (!confirm('Run DBScanner to discover databases via network shares?\nThis will add any new databases found to the config.')) return;
+    closeSettings();
+    // Show loading
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:9999;display:flex;align-items:center;justify-content:center;color:#5b9eff;font-size:16px;font-family:sans-serif;';
+    overlay.innerHTML = '<div style="text-align:center"><div style="font-size:36px;margin-bottom:10px" class="spin">🔍</div>Scanning network shares for databases…<br><span style="font-size:12px;color:#888">This may take up to 2 minutes</span></div>';
+    document.body.appendChild(overlay);
+    if (!document.getElementById('exportSpinStyle')) {
+        const style = document.createElement('style');
+        style.id = 'exportSpinStyle';
+        style.textContent = '@keyframes spin{to{transform:rotate(360deg)}}.spin{display:inline-block;animation:spin 1s linear infinite}';
+        document.head.appendChild(style);
+    }
+
+    try {
+        const res = await api('/api/scan-databases', { method: 'POST' });
+        overlay.remove();
+        if (res.ok) {
+            alert(`Scan complete!\n\nFound: ${res.found} databases\nAdded: ${res.added_count} new databases${res.added_count > 0 ? '\n\n' + res.added.join('\n') : ''}`);
+            await loadServers();
+        } else {
+            alert('Scan failed: ' + (res.error || 'Unknown error'));
+        }
+    } catch (e) {
+        overlay.remove();
+        alert('Scan failed: ' + e.message);
+    }
 }
 
 async function testCurrentConnection() {

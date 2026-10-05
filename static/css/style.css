@@ -589,6 +589,7 @@ body {
 }
 .history-item:hover { border-color: var(--primary); }
 .history-item .hi-time { color: var(--text-muted); font-size: 11px; white-space: nowrap; min-width: 120px; }
+.history-item .hi-user { color: var(--primary); font-size: 11px; white-space: nowrap; min-width: 80px; font-weight: 600; }
 .history-item .hi-sql {
     font-family: var(--mono); font-size: 12px; color: var(--text);
     flex: 1; white-space: pre-wrap; max-height: 60px; overflow: hidden;
@@ -686,6 +687,7 @@ body {
     font-weight: 600;
 }
 .btn-tx:hover { filter: brightness(1.1); }
+.user-display { font-size: 13px; color: var(--text-dim); margin-right: 8px; }
 
 .results-pagination {
     display: flex;
