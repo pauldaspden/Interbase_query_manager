@@ -1186,19 +1186,26 @@ function renderHistory(history) {
 }
 
 function rerunHistory(id) {
-    // history is loaded but we need to find it; reload then find
     api('/api/history').then(history => {
         const h = history.find(x => x.id === id);
         if (!h) return;
         state.editor.setValue(h.sql);
         switchTab('editor');
-        // also set the server/db
+        // set the server/db — rebuild dropdown without calling onServerChange()
+        // (which would reset currentDb to the first database)
         if (h.server_id) {
             state.currentServer = h.server_id;
             state.currentDb = h.db_path;
-            document.getElementById('serverSelect').value = h.server_id;
-            onServerChange();
-            document.getElementById('dbSelect').value = h.db_path;
+            const ss = document.getElementById('serverSelect');
+            ss.value = h.server_id;
+            const srv = state.servers.find(s => s.id === h.server_id);
+            const dbSel = document.getElementById('dbSelect');
+            if (srv) {
+                dbSel.innerHTML = srv.databases.map(db =>
+                    `<option value="${esc(db.path)}">${esc(db.name)}</option>`
+                ).join('');
+            }
+            dbSel.value = h.db_path;
         }
         state.editor.focus();
     });
