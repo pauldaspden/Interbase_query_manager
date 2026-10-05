@@ -859,20 +859,8 @@ function initColumnDrag() {
     });
 }
 
-function resultsPage(dir) {
-    const s = resultsState;
-    const totalPages = Math.ceil(s.allRows.length / s.pageSize);
-    s.page = Math.max(0, Math.min(totalPages - 1, s.page + dir));
-    renderResultsPage();
-}
+// Old resultsPage/resultsJump removed — using async server-side versions above
 
-function resultsJump(pageStr) {
-    const s = resultsState;
-    const totalPages = Math.ceil(s.allRows.length / s.pageSize);
-    const page = Math.max(1, Math.min(totalPages, parseInt(pageStr) || 1)) - 1;
-    s.page = page;
-    renderResultsPage();
-}
 
 function formatCell(v) {
     if (v === null || v === undefined) return '<span class="null-val">NULL</span>';
