@@ -134,7 +134,17 @@
                 <div class="multi-targets-header">
                     <span>Target Databases</span>
                     <div class="multi-select-actions">
-                        <button class="btn btn-small" onclick="multiSelectAll()">✓ All</button>
+                        <select id="multiQuickSelect" onchange="multiQuickSelect(this.value)" class="multi-quick-select">
+                            <option value="">Quick select…</option>
+                            <option value="all">All Databases</option>
+                            <option value="affinity">All Affinity DBs</option>
+                            <option value="live">All Live Affinity DBs</option>
+                            <option value="srv1">Srv 6 (PIDB06)</option>
+                            <option value="srv2">Srv 7 (PIDB07)</option>
+                            <option value="srv3">Srv 8 (PIDB08)</option>
+                            <option value="srv4">Srv 9 (PIDB09)</option>
+                            <option value="srv5">Srv 10 (PIDB10)</option>
+                        </select>
                         <button class="btn btn-small" onclick="multiSelectNone()">✗ None</button>
                     </div>
                 </div>

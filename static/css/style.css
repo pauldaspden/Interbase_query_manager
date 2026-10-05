@@ -500,7 +500,11 @@ body {
     font-weight: 600;
     flex-shrink: 0;
 }
-.multi-select-actions { display: flex; gap: 4px; }
+.multi-select-actions { display: flex; gap: 4px; align-items: center; }
+.multi-quick-select {
+    background: var(--bg); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 3px 6px; font-size: 12px;
+}
 .multi-targets-list {
     flex: 1;
     overflow-y: auto;

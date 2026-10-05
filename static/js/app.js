@@ -928,6 +928,75 @@ function multiSelectAll() {
     updateMultiSelectedCount();
 }
 
+// Live DB exclusions and rules from DBScanner.ps1
+const LIVE_DB_EXCLUSIONS = [1153, 2600, 2601, 2605, 2604, 2603, 2699, 2703, 2799, 4000, 4006, 4007, 4008, 4009];
+const GLOBAL_DB_EXCLUSIONS = [3056];
+
+function multiQuickSelect(value) {
+    if (!value) return;
+    // First deselect all
+    document.querySelectorAll('.mt-check').forEach(cb => { cb.checked = false; });
+    document.querySelectorAll('.mt-server-check').forEach(cb => { cb.checked = false; });
+
+    if (value === 'all') {
+        document.querySelectorAll('.mt-check').forEach(cb => { cb.checked = true; });
+        document.querySelectorAll('.mt-server-check').forEach(cb => { cb.checked = true; });
+    } else if (value === 'affinity') {
+        // 4-digit numeric filenames, excluding GLOBAL_DB_EXCLUSIONS
+        document.querySelectorAll('.mt-check').forEach(cb => {
+            const dbName = cb.closest('.mt-db-item')?.querySelector('.mt-db-name')?.textContent || '';
+            const baseName = dbName.split(' ')[0]; // company number is first part
+            const num = parseInt(baseName);
+            if (!isNaN(num) && baseName.length === 4 && !GLOBAL_DB_EXCLUSIONS.includes(num)) {
+                cb.checked = true;
+            }
+        });
+        // Update server checkboxes based on whether all their DBs are checked
+        updateServerCheckboxStates();
+    } else if (value === 'live') {
+        // 4-digit numeric, < 5000, excluding LIVE_DB_EXCLUSIONS and GLOBAL_DB_EXCLUSIONS
+        document.querySelectorAll('.mt-check').forEach(cb => {
+            const dbName = cb.closest('.mt-db-item')?.querySelector('.mt-db-name')?.textContent || '';
+            const baseName = dbName.split(' ')[0];
+            const num = parseInt(baseName);
+            if (!isNaN(num) && baseName.length === 4 && num < 5000
+                && !LIVE_DB_EXCLUSIONS.includes(num) && !GLOBAL_DB_EXCLUSIONS.includes(num)) {
+                cb.checked = true;
+            }
+        });
+        updateServerCheckboxStates();
+    } else if (value.startsWith('srv')) {
+        // Select all databases on a specific server
+        document.querySelectorAll(`.mt-check[data-server="${value}"]`).forEach(cb => { cb.checked = true; });
+        const srvCheck = document.querySelector(`.mt-server-check[data-server="${value}"]`);
+        if (srvCheck) srvCheck.checked = true;
+    }
+
+    updateMultiSelectedCount();
+    // Reset dropdown
+    document.getElementById('multiQuickSelect').value = '';
+}
+
+function updateServerCheckboxStates() {
+    // Set server checkbox to checked if all its DBs are checked,
+    // unchecked if none are checked, indeterminate if mixed
+    document.querySelectorAll('.mt-server-check').forEach(srvCheck => {
+        const sid = srvCheck.dataset.server;
+        const dbChecks = document.querySelectorAll(`.mt-check[data-server="${sid}"]`);
+        const checkedCount = Array.from(dbChecks).filter(cb => cb.checked).length;
+        if (checkedCount === dbChecks.length) {
+            srvCheck.checked = true;
+            srvCheck.indeterminate = false;
+        } else if (checkedCount === 0) {
+            srvCheck.checked = false;
+            srvCheck.indeterminate = false;
+        } else {
+            srvCheck.checked = false;
+            srvCheck.indeterminate = true;
+        }
+    });
+}
+
 function multiSelectNone() {
     document.querySelectorAll('.mt-check').forEach(cb => { cb.checked = false; });
     document.querySelectorAll('.mt-server-check').forEach(cb => { cb.checked = false; });
