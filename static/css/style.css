@@ -556,7 +556,8 @@ body {
     color: var(--text-dim);
 }
 .mt-db-item input[type=checkbox] { accent-color: var(--primary); width: 14px; height: 14px; }
-.mt-db-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mt-db-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.mt-server-tag { font-size: 9px; color: var(--text-muted); background: var(--bg-elev); padding: 1px 5px; border-radius: 8px; flex-shrink: 0; }
 
 .hint-label {
     font-size: 11px;
