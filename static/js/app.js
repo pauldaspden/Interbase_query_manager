@@ -662,7 +662,7 @@ function showDmlResult(affected, elapsed) {
     `;
 }
 
-// ── Results state (server-side pagination) ──────────────────────
+// ── Results state (database-side pagination) ────────────────────
 let resultsState = {
     columns: [],
     page: 0,
@@ -672,9 +672,11 @@ let resultsState = {
     label: '',
     truncated: false,
     elapsed: 0,
-    cacheId: null,
+    sql: '',       // store the SQL for page requests
+    serverId: null,
+    dbPath: null,
     colOrder: null,
-    loading: false,
+    timing: null,
 };
 
 function renderResults(res, label) {
@@ -686,10 +688,13 @@ function renderResults(res, label) {
     resultsState.label = label;
     resultsState.truncated = res.truncated || false;
     resultsState.elapsed = res.elapsed || 0;
-    resultsState.cacheId = res.cache_id;
     resultsState.colOrder = null;
-    // Store timing if available
     resultsState.timing = res.timing || null;
+    // Store SQL for page requests
+    const sel = state.editor.getSelection();
+    resultsState.sql = (sel && sel.trim()) ? sel.trim() : state.editor.getValue().trim();
+    resultsState.serverId = state.currentServer;
+    resultsState.dbPath = state.currentDb;
     renderResultsPage(res.rows);
 }
 
@@ -731,7 +736,7 @@ function renderResultsPage(pageRows) {
     panel.innerHTML = `
         <div class="results-header">
             <span class="results-info">${s.label}${truncated} — ${s.columns.length} columns, ${s.totalRows} rows${pageInfo}</span>
-            <span class="results-timer">${s.elapsed}s${s.timing ? ` (exec:${s.timing.execute}s fetch:${s.timing.fetch}s json:${s.timing.json_convert}s)` : ''}</span>
+            <span class="results-timer">${s.elapsed}s${s.timing ? ` (page1:${s.timing.page1}s count:${s.timing.count}s)` : ''}</span>
         </div>
         ${pagination}
         <div class="results-table-wrap">
@@ -749,44 +754,39 @@ async function resultsPage(dir) {
     const s = resultsState;
     const newPage = Math.max(0, Math.min(s.totalPages - 1, s.page + dir));
     if (newPage === s.page) return;
-    s.page = newPage;
-
-    // Show loading state
-    const tbody = document.querySelector('.results-table tbody');
-    if (tbody) tbody.innerHTML = '<tr><td colspan="99" style="text-align:center;padding:20px;color:var(--text-muted)">Loading page…</td></tr>';
-
-    try {
-        const res = await fetch(`/api/query/${s.cacheId}/page/${s.page}`);
-        if (res.status === 401) { window.location.href = '/login'; return; }
-        const data = await res.json();
-        if (data.error) {
-            alert(data.error);
-            return;
-        }
-        renderResultsPage(data.rows);
-    } catch (e) {
-        alert('Failed to load page: ' + e.message);
-    }
+    await loadResultsPage(newPage);
 }
 
 async function resultsJump(pageStr) {
     const s = resultsState;
     const page = Math.max(1, Math.min(s.totalPages, parseInt(pageStr) || 1)) - 1;
     if (page === s.page) return;
+    await loadResultsPage(page);
+}
+
+async function loadResultsPage(page) {
+    const s = resultsState;
     s.page = page;
 
+    // Show loading state
     const tbody = document.querySelector('.results-table tbody');
     if (tbody) tbody.innerHTML = '<tr><td colspan="99" style="text-align:center;padding:20px;color:var(--text-muted)">Loading page…</td></tr>';
 
     try {
-        const res = await fetch(`/api/query/${s.cacheId}/page/${s.page}`);
-        if (res.status === 401) { window.location.href = '/login'; return; }
-        const data = await res.json();
-        if (data.error) {
-            alert(data.error);
+        const res = await api('/api/query-page', {
+            method: 'POST',
+            body: JSON.stringify({
+                server_id: s.serverId,
+                db_path: s.dbPath,
+                sql: s.sql,
+                page: page,
+            }),
+        });
+        if (res.error) {
+            alert(res.error);
             return;
         }
-        renderResultsPage(data.rows);
+        renderResultsPage(res.rows);
     } catch (e) {
         alert('Failed to load page: ' + e.message);
     }

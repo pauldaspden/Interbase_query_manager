@@ -1109,42 +1109,29 @@ def api_table_count(server_id):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# ── Query execution with server-side result caching ──────────────────────
-# Large result sets are cached on the server. The browser only receives
-# one page (100 rows) at a time via /api/query/<cache_id>/page
-_query_cache = {}  # cache_id -> {columns, rows, row_count, elapsed, ts}
-_query_cache_lock = threading.Lock()
-_QUERY_CACHE_MAX = 10  # max cached result sets
-_QUERY_CACHE_TTL = 600  # 10 minutes
+# ── Query execution with database-side pagination ────────────────────────
+# Instead of fetching all rows and caching, we wrap the user's SQL in
+# a subquery with ROWS m TO n so InterBase only sends the page we need.
+# This turns a 25-second fetch of 20,000 rows into a <1-second fetch of 100.
 
-def _store_query_cache(columns, rows, elapsed):
-    """Store a result set in the cache and return its ID."""
-    cache_id = str(uuid.uuid4())[:12]
-    with _query_cache_lock:
-        # Evict old entries if cache is full
-        if len(_query_cache) >= _QUERY_CACHE_MAX:
-            # Remove oldest entry
-            oldest = min(_query_cache, key=lambda k: _query_cache[k].get("ts", 0))
-            _query_cache.pop(oldest, None)
-        _query_cache[cache_id] = {
-            "columns": columns,
-            "rows": rows,
-            "row_count": len(rows),
-            "elapsed": elapsed,
-            "ts": time.time(),
-        }
-    return cache_id
+PAGE_SIZE = 100
 
-def _get_query_cache(cache_id):
-    with _query_cache_lock:
-        entry = _query_cache.get(cache_id)
-        if entry is None:
-            return None
-        # Check TTL
-        if time.time() - entry["ts"] > _QUERY_CACHE_TTL:
-            _query_cache.pop(cache_id, None)
-            return None
-        return entry
+def _wrap_sql_paged(sql, page, page_size=PAGE_SIZE):
+    """Wrap user SQL in a subquery with ROWS pagination.
+    InterBase syntax: SELECT * FROM (<sql>) ROWS m TO n
+    """
+    # Strip trailing semicolon and whitespace
+    clean = sql.strip().rstrip(';').strip()
+    start = page * page_size + 1
+    end = start + page_size - 1
+    return f"SELECT * FROM ({clean}) ROWS {start} TO {end}"
+
+def _wrap_sql_count(sql):
+    """Wrap user SQL to get total row count.
+    SELECT COUNT(*) FROM (<sql>)
+    """
+    clean = sql.strip().rstrip(';').strip()
+    return f"SELECT COUNT(*) FROM ({clean})"
 
 @login_required
 @app.route("/api/query", methods=["POST"])
@@ -1153,9 +1140,7 @@ def api_query():
     server_id = data.get("server_id")
     db_path   = data.get("db_path")
     sql       = data.get("sql", "").strip()
-    max_rows  = data.get("max_rows", 10000)
     in_transaction = data.get("in_transaction", False)
-    page_size = 100  # rows per page sent to browser
     cfg = load_config()
     creds = cfg.get("credentials", {})
     if not sql:
@@ -1171,124 +1156,161 @@ def api_query():
         conn.set_autocommit(True)
 
     t0 = time.time()
+
     def _do_execute(conn):
+        # Check if this is a SELECT (returns rows) by running page 1
+        page_sql = _wrap_sql_paged(sql, 0)
         cur = conn.cursor()
-        t_exec = time.time()
-        cur.execute(sql)
-        t_exec_end = time.time()
-        if cur.description:
-            columns = [d[0] for d in cur.description]
-            cur.arraysize = 2000
-            t_fetch = time.time()
-            rows = cur.fetchmany(max_rows)
-            t_fetch_end = time.time()
-            row_count = len(rows)
+        cur.execute(page_sql)
+
+        if not cur.description:
+            # Not a SELECT — it's DML. Run the original SQL directly.
             cur.close()
-
-            # Convert all rows to JSON-safe format ONCE, then cache
-            t_json = time.time()
-            json_rows = rows_to_json(rows)
-            t_json_end = time.time()
-
-            # Store in server-side cache
-            cache_id = _store_query_cache(columns, json_rows, round(time.time() - t0, 3))
-
-            add_history({
-                "sql": sql,
-                "server_id": server_id,
-                "db_path": db_path,
-                "row_count": row_count,
-                "elapsed": round(time.time() - t0, 3),
-                "type": "SELECT",
-            })
-
-            # Return only first page + metadata
-            page_rows = json_rows[:page_size]
-            elapsed = time.time() - t0
-            return jsonify({
-                "columns": columns,
-                "rows": page_rows,
-                "row_count": row_count,
-                "page": 0,
-                "page_size": page_size,
-                "total_pages": (row_count + page_size - 1) // page_size,
-                "truncated": row_count >= max_rows,
-                "elapsed": round(elapsed, 3),
-                "in_transaction": in_transaction,
-                "cache_id": cache_id,
-                "timing": {
-                    "execute": round(t_exec_end - t_exec, 3),
-                    "fetch": round(t_fetch_end - t_fetch, 3),
-                    "json_convert": round(t_json_end - t_json, 3),
-                    "total": round(elapsed, 3),
-                },
-            })
-        else:
+            cur = conn.cursor()
+            cur.execute(sql)
             row_count = cur.rowcount
             if not in_transaction:
                 conn.commit()
             elapsed = time.time() - t0
             cur.close()
             add_history({
-                "sql": sql,
-                "server_id": server_id,
-                "db_path": db_path,
-                "row_count": row_count,
-                "elapsed": round(elapsed, 3),
-                "type": "DML",
+                "sql": sql, "server_id": server_id, "db_path": db_path,
+                "row_count": row_count, "elapsed": round(elapsed, 3), "type": "DML",
             })
             return jsonify({
-                "rows_affected": row_count,
-                "elapsed": round(elapsed, 3),
-                "in_transaction": in_transaction,
-                "uncommitted": in_transaction,
+                "rows_affected": row_count, "elapsed": round(elapsed, 3),
+                "in_transaction": in_transaction, "uncommitted": in_transaction,
             })
+
+        # SELECT — fetch page 1 (only 100 rows from InterBase)
+        columns = [d[0] for d in cur.description]
+        rows = cur.fetchall()
+        page_rows = rows_to_json(rows)
+        cur.close()
+        t_page1 = time.time()
+
+        # Get total row count (separate query)
+        total_count = None
+        try:
+            count_sql = _wrap_sql_count(sql)
+            cur2 = conn.cursor()
+            cur2.execute(count_sql)
+            count_row = cur2.fetchone()
+            cur2.close()
+            if count_row:
+                total_count = count_row[0]
+        except Exception:
+            pass  # Count query failed — total unknown
+        t_count = time.time()
+
+        elapsed = time.time() - t0
+        add_history({
+            "sql": sql, "server_id": server_id, "db_path": db_path,
+            "row_count": total_count or len(page_rows),
+            "elapsed": round(elapsed, 3), "type": "SELECT",
+        })
+
+        total_pages = ((total_count or len(page_rows)) + PAGE_SIZE - 1) // PAGE_SIZE
+
+        return jsonify({
+            "columns": columns,
+            "rows": page_rows,
+            "row_count": total_count or len(page_rows),
+            "page": 0,
+            "page_size": PAGE_SIZE,
+            "total_pages": total_pages,
+            "truncated": False,
+            "elapsed": round(elapsed, 3),
+            "in_transaction": in_transaction,
+            "timing": {
+                "page1": round(t_page1 - t0, 3),
+                "count": round(t_count - t_page1, 3),
+                "total": round(elapsed, 3),
+            },
+        })
 
     try:
         return _do_execute(conn)
     except Exception as e:
-        cm.close(server_id, db_path)
+        # If wrapped SQL fails, try running the original SQL directly
+        # (some SQL can't be wrapped in a subquery)
         try:
+            cm.close(server_id, db_path)
             conn = cm.get(server_id, db_path, creds["username"], creds["password"])
             if in_transaction:
                 conn.set_autocommit(False)
             else:
                 conn.set_autocommit(True)
-            return _do_execute(conn)
+            cur = conn.cursor()
+            cur.execute(sql)
+            if cur.description:
+                columns = [d[0] for d in cur.description]
+                cur.arraysize = 2000
+                rows = cur.fetchmany(10000)
+                json_rows = rows_to_json(rows)
+                cur.close()
+                elapsed = time.time() - t0
+                add_history({
+                    "sql": sql, "server_id": server_id, "db_path": db_path,
+                    "row_count": len(json_rows), "elapsed": round(elapsed, 3), "type": "SELECT",
+                })
+                return jsonify({
+                    "columns": columns, "rows": json_rows[:PAGE_SIZE],
+                    "row_count": len(json_rows), "page": 0, "page_size": PAGE_SIZE,
+                    "total_pages": (len(json_rows) + PAGE_SIZE - 1) // PAGE_SIZE,
+                    "elapsed": round(elapsed, 3), "in_transaction": in_transaction,
+                    "fallback": True,
+                })
+            else:
+                row_count = cur.rowcount
+                if not in_transaction:
+                    conn.commit()
+                elapsed = time.time() - t0
+                cur.close()
+                return jsonify({
+                    "rows_affected": row_count, "elapsed": round(elapsed, 3),
+                    "in_transaction": in_transaction, "uncommitted": in_transaction,
+                })
         except Exception as e2:
             elapsed = time.time() - t0
             add_history({
-                "sql": sql,
-                "server_id": server_id,
-                "db_path": db_path,
-                "error": str(e2),
-                "elapsed": round(elapsed, 3),
-                "type": "ERROR",
+                "sql": sql, "server_id": server_id, "db_path": db_path,
+                "error": str(e2), "elapsed": round(elapsed, 3), "type": "ERROR",
             })
             return jsonify({"error": str(e2), "elapsed": round(elapsed, 3)}), 200
 
 
 @login_required
-@app.route("/api/query/<cache_id>/page/<int:page>")
-def api_query_page(cache_id, page):
-    """Return a specific page of cached query results."""
-    entry = _get_query_cache(cache_id)
-    if entry is None:
-        return jsonify({"error": "Result cache expired or not found. Re-run the query."}), 404
+@app.route("/api/query-page", methods=["POST"])
+def api_query_page():
+    """Fetch a specific page of results using database-side ROWS pagination."""
+    data = request.get_json()
+    server_id = data.get("server_id")
+    db_path   = data.get("db_path")
+    sql       = data.get("sql", "").strip()
+    page      = data.get("page", 0)
+    cfg = load_config()
+    creds = cfg.get("credentials", {})
 
-    page_size = 100
-    start = page * page_size
-    end = min(start + page_size, entry["row_count"])
-    page_rows = entry["rows"][start:end]
+    try:
+        conn = cm.get(server_id, db_path, creds["username"], creds["password"])
+    except Exception as e:
+        return jsonify({"error": f"Connection failed: {e}"}), 500
 
-    return jsonify({
-        "rows": page_rows,
-        "page": page,
-        "page_size": page_size,
-        "row_count": entry["row_count"],
-        "total_pages": (entry["row_count"] + page_size - 1) // page_size,
-        "elapsed": entry["elapsed"],
-    })
+    try:
+        page_sql = _wrap_sql_paged(sql, page)
+        cur = conn.cursor()
+        cur.execute(page_sql)
+        columns = [d[0] for d in cur.description]
+        rows = cur.fetchall()
+        cur.close()
+        return jsonify({
+            "rows": rows_to_json(rows),
+            "page": page,
+            "page_size": PAGE_SIZE,
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @login_required
