@@ -1128,8 +1128,13 @@ def _wrap_sql_paged(sql, page, page_size=PAGE_SIZE):
 def _wrap_sql_count(sql):
     """Wrap user SQL to get total row count.
     Uses derived table: SELECT COUNT(*) FROM (<sql>)
+    Strips ORDER BY since it's not allowed in a derived table COUNT.
     """
+    import re as _re
     clean = sql.strip().rstrip(';').strip()
+    # Remove ORDER BY clause — not allowed inside a derived table for COUNT
+    # and unnecessary for counting
+    clean = _re.sub(r'\s+ORDER\s+BY\s+.*$', '', clean, flags=_re.IGNORECASE | _re.DOTALL)
     return f"SELECT COUNT(*) FROM ({clean})"
 
 @login_required
@@ -1189,8 +1194,8 @@ def api_query():
         t_page1 = time.time()
 
         # Get total row count — only if page 1 was full (might be more pages)
-        # Skip count if page 1 had fewer than PAGE_SIZE rows (all data fits on one page)
         total_count = None
+        count_failed = False
         if len(page_rows) >= PAGE_SIZE:
             try:
                 count_sql = _wrap_sql_count(sql)
@@ -1201,37 +1206,36 @@ def api_query():
                 if count_row:
                     total_count = count_row[0]
             except Exception:
-                pass  # Count query failed — total unknown
+                count_failed = True  # Count query failed — total unknown
         else:
             total_count = len(page_rows)
         t_count = time.time()
 
-        # If count query took more than 5 seconds, don't show total pages
-        count_time = t_count - t_page1
-        if count_time > 5 and total_count is None:
-            # Count was too slow or failed — estimate based on having more pages
-            total_count = None  # leave unknown
-
         elapsed = time.time() - t0
         add_history({
             "sql": sql, "server_id": server_id, "db_path": db_path,
-            "row_count": total_count or len(page_rows),
+            "row_count": total_count if total_count is not None else len(page_rows),
             "elapsed": round(elapsed, 3), "type": "SELECT",
         })
 
         if total_count is not None:
-            total_pages = (total_count + PAGE_SIZE - 1) // PAGE_SIZE
+            total_pages = max(1, (total_count + PAGE_SIZE - 1) // PAGE_SIZE)
+            display_count = total_count
         else:
-            # Unknown total — assume at least 2 pages since page 1 was full
-            total_pages = 2
+            # Unknown total — page 1 was full so there are definitely more
+            # Set a large number so pagination buttons work. The user can
+            # keep clicking Next until they get an empty/partial page.
+            total_pages = 999
+            display_count = "100+"
 
         return jsonify({
             "columns": columns,
             "rows": page_rows,
-            "row_count": total_count or len(page_rows),
+            "row_count": display_count,
             "page": 0,
             "page_size": PAGE_SIZE,
             "total_pages": total_pages,
+            "count_failed": count_failed,
             "truncated": False,
             "elapsed": round(elapsed, 3),
             "in_transaction": in_transaction,

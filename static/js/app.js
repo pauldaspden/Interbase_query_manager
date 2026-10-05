@@ -786,6 +786,18 @@ async function loadResultsPage(page) {
             alert(res.error);
             return;
         }
+        // If page is empty, we've gone past the last row — go back
+        if (!res.rows || res.rows.length === 0) {
+            if (page > 0) {
+                s.totalPages = page;  // this was the last page
+                await loadResultsPage(page - 1);
+                return;
+            }
+        }
+        // If this page has fewer than PAGE_SIZE rows, it's the last page
+        if (res.rows && res.rows.length < s.pageSize) {
+            s.totalPages = page + 1;
+        }
         renderResultsPage(res.rows);
     } catch (e) {
         alert('Failed to load page: ' + e.message);
