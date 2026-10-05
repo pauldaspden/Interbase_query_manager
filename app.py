@@ -1109,7 +1109,43 @@ def api_table_count(server_id):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# ── Query execution ──────────────────────────────────────────────────────
+# ── Query execution with server-side result caching ──────────────────────
+# Large result sets are cached on the server. The browser only receives
+# one page (100 rows) at a time via /api/query/<cache_id>/page
+_query_cache = {}  # cache_id -> {columns, rows, row_count, elapsed, ts}
+_query_cache_lock = threading.Lock()
+_QUERY_CACHE_MAX = 10  # max cached result sets
+_QUERY_CACHE_TTL = 600  # 10 minutes
+
+def _store_query_cache(columns, rows, elapsed):
+    """Store a result set in the cache and return its ID."""
+    cache_id = str(uuid.uuid4())[:12]
+    with _query_cache_lock:
+        # Evict old entries if cache is full
+        if len(_query_cache) >= _QUERY_CACHE_MAX:
+            # Remove oldest entry
+            oldest = min(_query_cache, key=lambda k: _query_cache[k].get("ts", 0))
+            _query_cache.pop(oldest, None)
+        _query_cache[cache_id] = {
+            "columns": columns,
+            "rows": rows,
+            "row_count": len(rows),
+            "elapsed": elapsed,
+            "ts": time.time(),
+        }
+    return cache_id
+
+def _get_query_cache(cache_id):
+    with _query_cache_lock:
+        entry = _query_cache.get(cache_id)
+        if entry is None:
+            return None
+        # Check TTL
+        if time.time() - entry["ts"] > _QUERY_CACHE_TTL:
+            _query_cache.pop(cache_id, None)
+            return None
+        return entry
+
 @login_required
 @app.route("/api/query", methods=["POST"])
 def api_query():
@@ -1117,8 +1153,9 @@ def api_query():
     server_id = data.get("server_id")
     db_path   = data.get("db_path")
     sql       = data.get("sql", "").strip()
-    max_rows  = data.get("max_rows", 1000)
-    in_transaction = data.get("in_transaction", False)  # transaction mode
+    max_rows  = data.get("max_rows", 10000)
+    in_transaction = data.get("in_transaction", False)
+    page_size = 100  # rows per page sent to browser
     cfg = load_config()
     creds = cfg.get("credentials", {})
     if not sql:
@@ -1128,8 +1165,6 @@ def api_query():
     except Exception as e:
         return jsonify({"error": f"Connection failed: {e}"}), 500
 
-    # In transaction mode, set autocommit off so changes can be rolled back.
-    # In normal mode, autocommit is on and changes are committed immediately.
     if in_transaction:
         conn.set_autocommit(False)
     else:
@@ -1141,11 +1176,18 @@ def api_query():
         cur.execute(sql)
         if cur.description:
             columns = [d[0] for d in cur.description]
-            cur.arraysize = min(max_rows, 2000)
+            cur.arraysize = 2000
             rows = cur.fetchmany(max_rows)
             row_count = len(rows)
             elapsed = time.time() - t0
             cur.close()
+
+            # Convert all rows to JSON-safe format ONCE, then cache
+            json_rows = rows_to_json(rows)
+
+            # Store in server-side cache
+            cache_id = _store_query_cache(columns, json_rows, round(elapsed, 3))
+
             add_history({
                 "sql": sql,
                 "server_id": server_id,
@@ -1154,19 +1196,23 @@ def api_query():
                 "elapsed": round(elapsed, 3),
                 "type": "SELECT",
             })
+
+            # Return only first page + metadata
+            page_rows = json_rows[:page_size]
             return jsonify({
                 "columns": columns,
-                "rows": rows_to_json(rows),
+                "rows": page_rows,
                 "row_count": row_count,
+                "page": 0,
+                "page_size": page_size,
+                "total_pages": (row_count + page_size - 1) // page_size,
                 "truncated": row_count >= max_rows,
                 "elapsed": round(elapsed, 3),
                 "in_transaction": in_transaction,
+                "cache_id": cache_id,
             })
         else:
             row_count = cur.rowcount
-            # Only commit if NOT in transaction mode.
-            # In transaction mode, changes stay uncommitted until
-            # the user clicks Commit or Rollback.
             if not in_transaction:
                 conn.commit()
             elapsed = time.time() - t0
@@ -1189,7 +1235,6 @@ def api_query():
     try:
         return _do_execute(conn)
     except Exception as e:
-        # If the connection might be stale, clear cache and retry once
         cm.close(server_id, db_path)
         try:
             conn = cm.get(server_id, db_path, creds["username"], creds["password"])
@@ -1209,6 +1254,29 @@ def api_query():
                 "type": "ERROR",
             })
             return jsonify({"error": str(e2), "elapsed": round(elapsed, 3)}), 200
+
+
+@login_required
+@app.route("/api/query/<cache_id>/page/<int:page>")
+def api_query_page(cache_id, page):
+    """Return a specific page of cached query results."""
+    entry = _get_query_cache(cache_id)
+    if entry is None:
+        return jsonify({"error": "Result cache expired or not found. Re-run the query."}), 404
+
+    page_size = 100
+    start = page * page_size
+    end = min(start + page_size, entry["row_count"])
+    page_rows = entry["rows"][start:end]
+
+    return jsonify({
+        "rows": page_rows,
+        "page": page,
+        "page_size": page_size,
+        "row_count": entry["row_count"],
+        "total_pages": (entry["row_count"] + page_size - 1) // page_size,
+        "elapsed": entry["elapsed"],
+    })
 
 
 @login_required

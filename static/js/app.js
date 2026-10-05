@@ -662,63 +662,62 @@ function showDmlResult(affected, elapsed) {
     `;
 }
 
-// ── Results state (for pagination) ───────────────────────────────
+// ── Results state (server-side pagination) ──────────────────────
 let resultsState = {
-    allRows: [],
     columns: [],
     page: 0,
     pageSize: 100,
+    totalRows: 0,
+    totalPages: 0,
     label: '',
     truncated: false,
     elapsed: 0,
+    cacheId: null,
+    colOrder: null,
+    loading: false,
 };
 
 function renderResults(res, label) {
-    // Store all rows in memory but only render one page at a time
-    resultsState.allRows = res.rows;
     resultsState.columns = res.columns;
     resultsState.page = 0;
+    resultsState.pageSize = res.page_size || 100;
+    resultsState.totalRows = res.row_count;
+    resultsState.totalPages = res.total_pages || 1;
     resultsState.label = label;
     resultsState.truncated = res.truncated || false;
     resultsState.elapsed = res.elapsed || 0;
-    resultsState.colOrder = null;  // reset column order
-    renderResultsPage();
+    resultsState.cacheId = res.cache_id;
+    resultsState.colOrder = null;
+    renderResultsPage(res.rows);
 }
 
-function renderResultsPage() {
+function renderResultsPage(pageRows) {
     const panel = document.getElementById('resultsPanel');
     panel.style.display = 'flex';
     const s = resultsState;
-    const totalPages = Math.ceil(s.allRows.length / s.pageSize);
-    const startIdx = s.page * s.pageSize;
-    const endIdx = Math.min(startIdx + s.pageSize, s.allRows.length);
-    const pageRows = s.allRows.slice(startIdx, endIdx);
 
-    // Column order — use colOrder if set (after drag), otherwise original
     const colOrder = s.colOrder || s.columns.map((_, i) => i);
-
     const truncated = s.truncated ? ' <span style="color:var(--warning)">(truncated)</span>' : '';
-    const pageInfo = totalPages > 1
-        ? ` <span style="color:var(--text-muted)">· Page ${s.page + 1}/${totalPages} (rows ${startIdx + 1}-${endIdx} of ${s.allRows.length})</span>`
+    const pageInfo = s.totalPages > 1
+        ? ` <span style="color:var(--text-muted)">· Page ${s.page + 1}/${s.totalPages} (rows ${s.page * s.pageSize + 1}-${Math.min((s.page + 1) * s.pageSize, s.totalRows)} of ${s.totalRows})</span>`
         : '';
 
     let pagination = '';
-    if (totalPages > 1) {
+    if (s.totalPages > 1) {
         pagination = `
             <div class="results-pagination">
                 <button class="btn btn-small" onclick="resultsPage(-1)" ${s.page === 0 ? 'disabled' : ''}>◀ Prev</button>
-                <span class="page-info">${s.page + 1} / ${totalPages}</span>
-                <button class="btn btn-small" onclick="resultsPage(1)" ${s.page >= totalPages - 1 ? 'disabled' : ''}>Next ▶</button>
+                <span class="page-info">${s.page + 1} / ${s.totalPages}</span>
+                <button class="btn btn-small" onclick="resultsPage(1)" ${s.page >= s.totalPages - 1 ? 'disabled' : ''}>Next ▶</button>
                 <span class="page-jump">
                     Jump to page:
-                    <input type="number" min="1" max="${totalPages}" value="${s.page + 1}"
+                    <input type="number" min="1" max="${s.totalPages}" value="${s.page + 1}"
                            style="width:60px" onchange="resultsJump(this.value)">
                 </span>
             </div>
         `;
     }
 
-    // Build table with draggable column headers
     const headers = colOrder.map((colIdx, displayIdx) => {
         return `<th draggable="true" data-col-idx="${colIdx}" data-display-idx="${displayIdx}">${esc(s.columns[colIdx])}</th>`;
     }).join('');
@@ -729,7 +728,7 @@ function renderResultsPage() {
 
     panel.innerHTML = `
         <div class="results-header">
-            <span class="results-info">${s.label}${truncated} — ${s.columns.length} columns, ${s.allRows.length} rows${pageInfo}</span>
+            <span class="results-info">${s.label}${truncated} — ${s.columns.length} columns, ${s.totalRows} rows${pageInfo}</span>
             <span class="results-timer">${s.elapsed}s</span>
         </div>
         ${pagination}
@@ -741,8 +740,54 @@ function renderResultsPage() {
         </div>
     `;
 
-    // Attach drag handlers to column headers
     initColumnDrag();
+}
+
+async function resultsPage(dir) {
+    const s = resultsState;
+    const newPage = Math.max(0, Math.min(s.totalPages - 1, s.page + dir));
+    if (newPage === s.page) return;
+    s.page = newPage;
+
+    // Show loading state
+    const tbody = document.querySelector('.results-table tbody');
+    if (tbody) tbody.innerHTML = '<tr><td colspan="99" style="text-align:center;padding:20px;color:var(--text-muted)">Loading page…</td></tr>';
+
+    try {
+        const res = await fetch(`/api/query/${s.cacheId}/page/${s.page}`);
+        if (res.status === 401) { window.location.href = '/login'; return; }
+        const data = await res.json();
+        if (data.error) {
+            alert(data.error);
+            return;
+        }
+        renderResultsPage(data.rows);
+    } catch (e) {
+        alert('Failed to load page: ' + e.message);
+    }
+}
+
+async function resultsJump(pageStr) {
+    const s = resultsState;
+    const page = Math.max(1, Math.min(s.totalPages, parseInt(pageStr) || 1)) - 1;
+    if (page === s.page) return;
+    s.page = page;
+
+    const tbody = document.querySelector('.results-table tbody');
+    if (tbody) tbody.innerHTML = '<tr><td colspan="99" style="text-align:center;padding:20px;color:var(--text-muted)">Loading page…</td></tr>';
+
+    try {
+        const res = await fetch(`/api/query/${s.cacheId}/page/${s.page}`);
+        if (res.status === 401) { window.location.href = '/login'; return; }
+        const data = await res.json();
+        if (data.error) {
+            alert(data.error);
+            return;
+        }
+        renderResultsPage(data.rows);
+    } catch (e) {
+        alert('Failed to load page: ' + e.message);
+    }
 }
 
 function initColumnDrag() {
@@ -855,20 +900,21 @@ function formatCell(v) {
 }
 
 function sortTable(th, colIdx) {
-    // Sort all rows (not just current page), then re-render
-    const s = resultsState;
+    // Sorting with server-side pagination: sort the current page only
+    // (full sort would require re-querying the database with ORDER BY)
+    const tbody = document.querySelector('.results-table tbody');
+    if (!tbody) return;
+    const rows = Array.from(tbody.querySelectorAll('tr'));
     const asc = th.dataset.sort === 'asc';
     th.dataset.sort = asc ? 'desc' : 'asc';
-
-    s.allRows.sort((a, b) => {
-        const av = a[colIdx] === null ? '' : String(a[colIdx]);
-        const bv = b[colIdx] === null ? '' : String(b[colIdx]);
+    rows.sort((a, b) => {
+        const av = a.cells[colIdx] ? a.cells[colIdx].textContent : '';
+        const bv = b.cells[colIdx] ? b.cells[colIdx].textContent : '';
         const an = parseFloat(av), bn = parseFloat(bv);
         if (!isNaN(an) && !isNaN(bn)) return asc ? an - bn : bn - an;
         return asc ? av.localeCompare(bv) : bv.localeCompare(av);
     });
-    s.page = 0;
-    renderResultsPage();
+    rows.forEach(r => tbody.appendChild(r));
 }
 
 // ── Multi-Server Query ───────────────────────────────────────────
