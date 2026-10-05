@@ -63,6 +63,13 @@ def _get_auth_conn():
         raise RuntimeError(f"Auth server {AUTH_HOST} not found in config")
     return cm.get(server["id"], AUTH_DB_PATH, creds.get("username", "SYSDBA"), creds.get("password", "masterkey"))
 
+import hashlib as _hashlib
+
+def _hash_passwd(password):
+    """Hash a password the same way Affinity stores it in MEMBERS_.PASSWD.
+    The column is 32 hex chars = MD5 hash."""
+    return _hashlib.md5(password.encode("utf-8")).hexdigest()
+
 def check_login(username, password):
     """Authenticate against the members_ table in PAYOFFICE.IB on PIDB08."""
     if firebirdsql is None:
@@ -70,7 +77,8 @@ def check_login(username, password):
     conn = _get_auth_conn()
     cur = conn.cursor()
     cur.execute(
-        "SELECT USERNAME, PASSWD FROM MEMBERS_ "
+        "SELECT USERNAME, PASSWD, LOGIN_DISABLED "
+        "FROM MEMBERS_ "
         "WHERE UPPER(USERNAME) = '" + username.upper().replace("'", "''") + "'"
     )
     row = cur.fetchone()
@@ -78,7 +86,16 @@ def check_login(username, password):
     if row:
         db_username = row[0].strip() if isinstance(row[0], str) else str(row[0])
         db_passwd = row[1].strip() if isinstance(row[1], str) else str(row[1])
-        if db_passwd == password:
+        if isinstance(db_passwd, bytes):
+            db_passwd = db_passwd.decode("latin-1")
+        login_disabled = row[2]
+        if isinstance(login_disabled, str):
+            login_disabled = login_disabled.strip().upper()
+        # Check if account is disabled
+        if login_disabled in ("Y", "1", "TRUE"):
+            return None
+        # Compare MD5 hash of supplied password with stored hash
+        if db_passwd.lower() == _hash_passwd(password).lower():
             return {
                 "username": db_username,
                 "name": db_username,
