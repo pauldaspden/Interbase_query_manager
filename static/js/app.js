@@ -231,6 +231,7 @@ function renderDbList() {
         node.innerHTML = `
             <span class="db-icon">🗄</span>
             <span class="db-label">${esc(db.name)}</span>
+            <span class="db-server-tag">${esc(db.server_name.replace('Production Server ', 'Srv ').replace(' (PIDB', ' (').replace(')', ''))}</span>
             <button class="db-delete-btn" title="Delete" data-server-id="${esc(db.server_id)}" data-db-path="${esc(db.path)}" data-db-name="${esc(db.name)}">×</button>
         `;
         list.appendChild(node);
