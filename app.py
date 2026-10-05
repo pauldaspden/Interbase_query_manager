@@ -1173,32 +1173,38 @@ def api_query():
     t0 = time.time()
     def _do_execute(conn):
         cur = conn.cursor()
+        t_exec = time.time()
         cur.execute(sql)
+        t_exec_end = time.time()
         if cur.description:
             columns = [d[0] for d in cur.description]
             cur.arraysize = 2000
+            t_fetch = time.time()
             rows = cur.fetchmany(max_rows)
+            t_fetch_end = time.time()
             row_count = len(rows)
-            elapsed = time.time() - t0
             cur.close()
 
             # Convert all rows to JSON-safe format ONCE, then cache
+            t_json = time.time()
             json_rows = rows_to_json(rows)
+            t_json_end = time.time()
 
             # Store in server-side cache
-            cache_id = _store_query_cache(columns, json_rows, round(elapsed, 3))
+            cache_id = _store_query_cache(columns, json_rows, round(time.time() - t0, 3))
 
             add_history({
                 "sql": sql,
                 "server_id": server_id,
                 "db_path": db_path,
                 "row_count": row_count,
-                "elapsed": round(elapsed, 3),
+                "elapsed": round(time.time() - t0, 3),
                 "type": "SELECT",
             })
 
             # Return only first page + metadata
             page_rows = json_rows[:page_size]
+            elapsed = time.time() - t0
             return jsonify({
                 "columns": columns,
                 "rows": page_rows,
@@ -1210,6 +1216,12 @@ def api_query():
                 "elapsed": round(elapsed, 3),
                 "in_transaction": in_transaction,
                 "cache_id": cache_id,
+                "timing": {
+                    "execute": round(t_exec_end - t_exec, 3),
+                    "fetch": round(t_fetch_end - t_fetch, 3),
+                    "json_convert": round(t_json_end - t_json, 3),
+                    "total": round(elapsed, 3),
+                },
             })
         else:
             row_count = cur.rowcount

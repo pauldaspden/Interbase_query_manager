@@ -688,6 +688,8 @@ function renderResults(res, label) {
     resultsState.elapsed = res.elapsed || 0;
     resultsState.cacheId = res.cache_id;
     resultsState.colOrder = null;
+    // Store timing if available
+    resultsState.timing = res.timing || null;
     renderResultsPage(res.rows);
 }
 
@@ -729,7 +731,7 @@ function renderResultsPage(pageRows) {
     panel.innerHTML = `
         <div class="results-header">
             <span class="results-info">${s.label}${truncated} — ${s.columns.length} columns, ${s.totalRows} rows${pageInfo}</span>
-            <span class="results-timer">${s.elapsed}s</span>
+            <span class="results-timer">${s.elapsed}s${s.timing ? ` (exec:${s.timing.execute}s fetch:${s.timing.fetch}s json:${s.timing.json_convert}s)` : ''}</span>
         </div>
         ${pagination}
         <div class="results-table-wrap">
