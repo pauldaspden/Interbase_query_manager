@@ -488,6 +488,58 @@ def logout():
     session.pop("user", None)
     return redirect("/login")
 
+@app.route("/api/auth-debug")
+def auth_debug():
+    """Debug endpoint to test authentication database connection (no login required)."""
+    results = {}
+    # 1. Can we connect?
+    try:
+        conn = _get_auth_conn()
+        results["connection"] = "OK"
+    except Exception as e:
+        results["connection"] = f"FAILED: {e}"
+        return jsonify(results)
+
+    # 2. Does the MEMBERS_ table exist and how many rows?
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM MEMBERS_")
+        count = cur.fetchone()[0]
+        results["members_count"] = count
+    except Exception as e:
+        results["members_count"] = f"ERROR: {e}"
+        cur.close()
+        return jsonify(results)
+
+    # 3. Show first 5 users (username only, no passwords)
+    try:
+        cur.execute("SELECT USERNAME FROM MEMBERS_ ROWS 1 TO 5")
+        sample = []
+        for row in cur.fetchall():
+            uname = row[0].strip() if isinstance(row[0], str) else str(row[0])
+            sample.append(uname)
+        results["sample_users"] = sample
+    except Exception as e:
+        results["sample_users"] = f"ERROR: {e}"
+
+    # 4. What columns does MEMBERS_ have?
+    try:
+        cur.execute(
+            "SELECT f.RDB$FIELD_NAME "
+            "FROM RDB$RELATION_FIELDS f "
+            "WHERE f.RDB$RELATION_NAME = 'MEMBERS_' "
+            "ORDER BY f.RDB$FIELD_POSITION"
+        )
+        cols = []
+        for row in cur.fetchall():
+            cols.append(row[0].strip() if isinstance(row[0], str) else str(row[0]))
+        results["columns"] = cols
+    except Exception as e:
+        results["columns"] = f"ERROR: {e}"
+
+    cur.close()
+    return jsonify(results)
+
 @app.route("/api/user")
 def api_user():
     user = get_current_user()
