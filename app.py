@@ -49,9 +49,6 @@ os.makedirs(SAVED_DIR, exist_ok=True)
 AUTH_HOST = "10.100.5.18"  # PIDB08
 AUTH_DB_PATH = r"e:\Databases\MyPO\PAYOFFICE.IB"
 
-# Fallback admin user (for when the database is unreachable)
-USERS_PATH = os.path.join(BASE_DIR, "users.json")
-
 def _get_auth_conn():
     """Get a connection to the PAYOFFICE.IB auth database on PIDB08."""
     cfg = load_config()
@@ -66,47 +63,27 @@ def _get_auth_conn():
         raise RuntimeError(f"Auth server {AUTH_HOST} not found in config")
     return cm.get(server["id"], AUTH_DB_PATH, creds.get("username", "SYSDBA"), creds.get("password", "masterkey"))
 
-def hash_password(pw):
-    return hashlib.sha256(pw.encode("utf-8")).hexdigest()
-
 def check_login(username, password):
-    """Authenticate against the members_ table in PAYOFFICE.IB on PIDB08.
-    Falls back to local users.json if the database is unreachable.
-    """
-    # Try database authentication first
-    if firebirdsql is not None:
-        try:
-            conn = _get_auth_conn()
-            cur = conn.cursor()
-            cur.execute(
-                "SELECT USERNAME, PASSWD FROM MEMBERS_ "
-                "WHERE UPPER(USERNAME) = '" + username.upper().replace("'", "''") + "'"
-            )
-            row = cur.fetchone()
-            cur.close()
-            if row:
-                db_username = row[0].strip() if isinstance(row[0], str) else str(row[0])
-                db_passwd = row[1].strip() if isinstance(row[1], str) else str(row[1])
-                # Compare password (members_ stores plaintext)
-                if db_passwd == password:
-                    return {
-                        "username": db_username,
-                        "name": db_username,
-                        "admin": True,  # all HD_ users are admins
-                    }
-            # User not found or password mismatch
-            return None
-        except Exception:
-            pass  # Fall through to local users
-
-    # Fallback: local users.json (for when PIDB08 is unreachable)
-    if os.path.exists(USERS_PATH):
-        with open(USERS_PATH, "r") as f:
-            users = json.load(f)
-        for u in users.get("users", []):
-            if u["username"].lower() == username.lower():
-                if u["password_hash"] == hash_password(password):
-                    return u
+    """Authenticate against the members_ table in PAYOFFICE.IB on PIDB08."""
+    if firebirdsql is None:
+        raise RuntimeError("Database driver not available")
+    conn = _get_auth_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT USERNAME, PASSWD FROM MEMBERS_ "
+        "WHERE UPPER(USERNAME) = '" + username.upper().replace("'", "''") + "'"
+    )
+    row = cur.fetchone()
+    cur.close()
+    if row:
+        db_username = row[0].strip() if isinstance(row[0], str) else str(row[0])
+        db_passwd = row[1].strip() if isinstance(row[1], str) else str(row[1])
+        if db_passwd == password:
+            return {
+                "username": db_username,
+                "name": db_username,
+                "admin": True,
+            }
     return None
 
 def get_current_user():
@@ -485,7 +462,13 @@ def login():
         data = request.get_json() if request.is_json else request.form
         username = (data.get("username") or "").strip()
         password = data.get("password") or ""
-        user = check_login(username, password)
+        try:
+            user = check_login(username, password)
+        except Exception as e:
+            err = f"Cannot connect to authentication database: {e}"
+            if request.is_json:
+                return jsonify({"ok": False, "error": err}), 500
+            return render_template("login.html", error=err)
         if user:
             session["user"] = {
                 "username": user["username"],
