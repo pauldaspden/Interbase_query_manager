@@ -1117,18 +1117,17 @@ def api_table_count(server_id):
 PAGE_SIZE = 100
 
 def _wrap_sql_paged(sql, page, page_size=PAGE_SIZE):
-    """Wrap user SQL in a subquery with ROWS pagination.
-    InterBase syntax: SELECT * FROM (<sql>) ROWS m TO n
+    """Append ROWS m TO n to the user's SQL for pagination.
+    InterBase ROWS must be on the outer SELECT, not inside a subquery.
     """
-    # Strip trailing semicolon and whitespace
     clean = sql.strip().rstrip(';').strip()
     start = page * page_size + 1
     end = start + page_size - 1
-    return f"SELECT * FROM ({clean}) ROWS {start} TO {end}"
+    return f"{clean} ROWS {start} TO {end}"
 
 def _wrap_sql_count(sql):
     """Wrap user SQL to get total row count.
-    SELECT COUNT(*) FROM (<sql>)
+    Uses derived table: SELECT COUNT(*) FROM (<sql>)
     """
     clean = sql.strip().rstrip(';').strip()
     return f"SELECT COUNT(*) FROM ({clean})"
@@ -1189,19 +1188,29 @@ def api_query():
         cur.close()
         t_page1 = time.time()
 
-        # Get total row count (separate query)
+        # Get total row count — only if page 1 was full (might be more pages)
+        # Skip count if page 1 had fewer than PAGE_SIZE rows (all data fits on one page)
         total_count = None
-        try:
-            count_sql = _wrap_sql_count(sql)
-            cur2 = conn.cursor()
-            cur2.execute(count_sql)
-            count_row = cur2.fetchone()
-            cur2.close()
-            if count_row:
-                total_count = count_row[0]
-        except Exception:
-            pass  # Count query failed — total unknown
+        if len(page_rows) >= PAGE_SIZE:
+            try:
+                count_sql = _wrap_sql_count(sql)
+                cur2 = conn.cursor()
+                cur2.execute(count_sql)
+                count_row = cur2.fetchone()
+                cur2.close()
+                if count_row:
+                    total_count = count_row[0]
+            except Exception:
+                pass  # Count query failed — total unknown
+        else:
+            total_count = len(page_rows)
         t_count = time.time()
+
+        # If count query took more than 5 seconds, don't show total pages
+        count_time = t_count - t_page1
+        if count_time > 5 and total_count is None:
+            # Count was too slow or failed — estimate based on having more pages
+            total_count = None  # leave unknown
 
         elapsed = time.time() - t0
         add_history({
@@ -1210,7 +1219,11 @@ def api_query():
             "elapsed": round(elapsed, 3), "type": "SELECT",
         })
 
-        total_pages = ((total_count or len(page_rows)) + PAGE_SIZE - 1) // PAGE_SIZE
+        if total_count is not None:
+            total_pages = (total_count + PAGE_SIZE - 1) // PAGE_SIZE
+        else:
+            # Unknown total — assume at least 2 pages since page 1 was full
+            total_pages = 2
 
         return jsonify({
             "columns": columns,
