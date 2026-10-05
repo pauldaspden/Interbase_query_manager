@@ -140,6 +140,12 @@ body {
 }
 .sidebar-header h2 { font-size: 14px; text-transform: uppercase; color: var(--text-dim); letter-spacing: 1px; }
 .server-tree { flex: 1; overflow-y: auto; padding: 8px; }
+.db-list-flat { flex: 1; overflow-y: auto; padding: 8px; }
+.conn-current { display: flex; align-items: center; gap: 10px; }
+.conn-current-label {
+    font-size: 14px; font-weight: 600; color: var(--primary);
+    padding: 4px 12px; background: var(--primary-bg); border-radius: 6px;
+}
 
 .db-search-bar { padding: 6px 10px; flex-shrink: 0; }
 .db-search-bar input {

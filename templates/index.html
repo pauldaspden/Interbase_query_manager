@@ -41,7 +41,7 @@
 <!-- ═══ Main Layout ═══ -->
 <div class="main-layout">
 
-<!-- ═══ Left Sidebar: Server Tree ═══ -->
+<!-- ═══ Left Sidebar: Database List ═══ -->
 <aside class="sidebar" id="sidebar">
     <div class="sidebar-header">
         <h2>Databases</h2>
@@ -51,8 +51,8 @@
         <input type="text" id="dbSearch" placeholder="🔍 Search databases…" oninput="searchDatabases()">
     </div>
     <div class="db-search-results" id="dbSearchResults" style="display:none"></div>
-    <div class="server-tree" id="serverTree">
-        <p class="muted">Loading servers…</p>
+    <div class="db-list-flat" id="dbListFlat">
+        <p class="muted">Loading databases…</p>
     </div>
 </aside>
 
@@ -60,13 +60,8 @@
 <main class="content">
     <!-- Connection bar -->
     <div class="conn-bar">
-        <div class="conn-selects">
-            <label>Server:
-                <select id="serverSelect" onchange="onServerChange()"></select>
-            </label>
-            <label>Database:
-                <select id="dbSelect" onchange="onDbChange()"></select>
-            </label>
+        <div class="conn-current">
+            <span id="currentDbLabel" class="conn-current-label">No database selected</span>
         </div>
         <div class="conn-actions">
             <button class="btn btn-primary" onclick="runQuery()">▶ Execute (F6)</button>

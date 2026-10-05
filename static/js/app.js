@@ -191,40 +191,91 @@ async function logout() {
     window.location.href = '/logout';
 }
 
-// ── Servers ──────────────────────────────────────────────────────
+// ── Servers / Databases ──────────────────────────────────────────
 async function loadServers() {
     const servers = await api('/api/servers');
     state.servers = servers;
-    renderServerTree(servers);
-    populateServerSelect(servers);
+    // Build a flat list of all databases across all servers, sorted by company_number
+    state.allDbs = [];
+    for (const srv of servers) {
+        for (const db of srv.databases) {
+            state.allDbs.push({
+                ...db,
+                server_id: srv.id,
+                server_name: srv.name,
+                server_host: srv.host,
+            });
+        }
+    }
+    // Sort by company_number (numeric)
+    state.allDbs.sort((a, b) => {
+        const an = parseInt(a.company_number) || 999999;
+        const bn = parseInt(b.company_number) || 999999;
+        return an - bn;
+    });
+    renderDbList();
     renderMultiTargets(servers);
+}
+
+function renderDbList() {
+    const list = document.getElementById('dbListFlat');
+    if (!list) return;
+    list.innerHTML = '';
+
+    state.allDbs.forEach(db => {
+        const node = document.createElement('div');
+        node.className = 'db-node';
+        node.dataset.serverId = db.server_id;
+        node.dataset.dbPath = db.path;
+        node.dataset.dbName = db.name;
+        node.innerHTML = `
+            <span class="db-icon">🗄</span>
+            <span class="db-label">${esc(db.name)}</span>
+            <button class="db-delete-btn" title="Delete" data-server-id="${esc(db.server_id)}" data-db-path="${esc(db.path)}" data-db-name="${esc(db.name)}">×</button>
+        `;
+        list.appendChild(node);
+    });
+
+    // Attach click handlers
+    list.querySelectorAll('.db-node').forEach(node => {
+        node.addEventListener('click', function(e) {
+            if (e.target.classList.contains('db-delete-btn')) return;
+            selectDb(this.dataset.serverId, this.dataset.dbPath, this.dataset.dbName, this);
+        });
+    });
+
+    // Attach delete handlers
+    list.querySelectorAll('.db-delete-btn').forEach(btn => {
+        btn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            deleteDatabase(e, this.dataset.serverId, this.dataset.dbPath, this.dataset.dbName);
+        });
+    });
 }
 
 // ── Database search ──────────────────────────────────────────────
 function searchDatabases() {
     const query = document.getElementById('dbSearch').value.trim().toLowerCase();
     const resultsDiv = document.getElementById('dbSearchResults');
-    const treeDiv = document.getElementById('serverTree');
+    const listDiv = document.getElementById('dbListFlat');
 
     if (!query) {
         resultsDiv.style.display = 'none';
         resultsDiv.innerHTML = '';
-        treeDiv.style.display = '';
+        listDiv.style.display = '';
         return;
     }
 
-    // Search across all servers and databases
+    // Search across all databases
     const matches = [];
-    for (const srv of state.servers) {
-        for (const db of srv.databases) {
-            const haystack = (db.name + ' ' + (db.company_number || '') + ' ' + db.path).toLowerCase();
-            if (haystack.includes(query)) {
-                matches.push({ server: srv, db: db });
-            }
+    for (const db of state.allDbs) {
+        const haystack = (db.name + ' ' + (db.company_number || '') + ' ' + db.path).toLowerCase();
+        if (haystack.includes(query)) {
+            matches.push(db);
         }
     }
 
-    treeDiv.style.display = 'none';
+    listDiv.style.display = 'none';
     resultsDiv.style.display = 'block';
 
     if (matches.length === 0) {
@@ -236,10 +287,10 @@ function searchDatabases() {
     const shown = matches.slice(0, 100);
     resultsDiv.innerHTML = `
         <div class="search-result-count">${matches.length} database${matches.length !== 1 ? 's' : ''} found${matches.length > 100 ? ' (showing first 100)' : ''}</div>
-        ${shown.map(m => `
-            <div class="search-result-item" data-server-id="${esc(m.server.id)}" data-db-path="${esc(m.db.path)}" data-db-name="${esc(m.db.name)}">
-                <div class="search-result-name">${highlightMatch(m.db.name, query)}</div>
-                <div class="search-result-server">${esc(m.server.name)}</div>
+        ${shown.map(db => `
+            <div class="search-result-item" data-server-id="${esc(db.server_id)}" data-db-path="${esc(db.path)}" data-db-name="${esc(db.name)}">
+                <div class="search-result-name">${highlightMatch(db.name, query)}</div>
+                <div class="search-result-server">${esc(db.server_name)}</div>
             </div>
         `).join('')}
     `;
@@ -251,7 +302,7 @@ function searchDatabases() {
             const dpath = this.dataset.dbPath;
             const dname = this.dataset.dbName;
             selectDb(sid, dpath, dname, null);
-            // Clear search and show tree
+            // Clear search and show list
             document.getElementById('dbSearch').value = '';
             searchDatabases();
         });
@@ -266,82 +317,13 @@ function highlightMatch(text, query) {
            esc(text.substring(idx + query.length));
 }
 
-function renderServerTree(servers) {
-    const tree = document.getElementById('serverTree');
-    tree.innerHTML = '';
-    servers.forEach(srv => {
-        const node = document.createElement('div');
-        node.className = 'server-node';
-        node.innerHTML = `
-            <div class="server-header" onclick="toggleServer(this)">
-                <span class="server-icon">🖥</span>
-                <span>${esc(srv.name)}</span>
-                <span class="db-count-badge">${srv.databases.length}</span>
-                <span class="server-status unknown" id="status-${srv.id}"></span>
-            </div>
-            <div class="db-list" style="display:none">
-                <div class="db-add-btn" onclick="openAddDbModal('${srv.id}', '${esc(srv.name)}')">+ Add database</div>
-                ${srv.databases.map(db => `
-                    <div class="db-node" data-server-id="${esc(srv.id)}" data-db-path="${esc(db.path)}" data-db-name="${esc(db.name)}">
-                        <span class="db-icon">🗄</span>
-                        <span class="db-label">${esc(db.name)}</span>
-                        <button class="db-delete-btn" title="Delete" data-server-id="${esc(srv.id)}" data-db-path="${esc(db.path)}" data-db-name="${esc(db.name)}">×</button>
-                    </div>
-                `).join('')}
-            </div>
-        `;
-        tree.appendChild(node);
-    });
-
-    // Attach click handlers via data attributes (avoids backslash escaping issues
-    // that occur when putting Windows paths in inline onclick="..." attributes)
-    tree.querySelectorAll('.db-node').forEach(node => {
-        node.addEventListener('click', function(e) {
-            if (e.target.classList.contains('db-delete-btn')) return; // handle separately
-            const sid = this.dataset.serverId;
-            const dpath = this.dataset.dbPath;
-            const dname = this.dataset.dbName;
-            selectDb(sid, dpath, dname, this);
-        });
-    });
-
-    // Attach delete handlers
-    tree.querySelectorAll('.db-delete-btn').forEach(btn => {
-        btn.addEventListener('click', function(e) {
-            e.stopPropagation();
-            const sid = this.dataset.serverId;
-            const dpath = this.dataset.dbPath;
-            const dname = this.dataset.dbName;
-            deleteDatabase(e, sid, dpath, dname);
-        });
-    });
-}
-
-function toggleServer(header) {
-    const list = header.nextElementSibling;
-    list.style.display = list.style.display === 'none' ? 'block' : 'none';
-    header.classList.toggle('expanded');
-}
-
 function selectDb(serverId, dbPath, dbName, el) {
     state.currentServer = serverId;
     state.currentDb = dbPath;
 
-    // Update the server dropdown
-    const ss = document.getElementById('serverSelect');
-    ss.value = serverId;
-
-    // Rebuild the database dropdown for this server (without calling onServerChange
-    // which would reset currentDb to the first database)
-    const srv = state.servers.find(s => s.id === serverId);
-    const dbSel = document.getElementById('dbSelect');
-    if (srv) {
-        dbSel.innerHTML = srv.databases.map(db =>
-            `<option value="${esc(db.path)}">${esc(db.name)}</option>`
-        ).join('');
-    }
-    // Now select the actual database the user clicked
-    dbSel.value = dbPath;
+    // Update the current database label
+    const label = document.getElementById('currentDbLabel');
+    if (label) label.textContent = dbName || dbPath;
 
     // highlight active
     document.querySelectorAll('.db-node').forEach(n => n.classList.remove('active'));
@@ -349,36 +331,6 @@ function selectDb(serverId, dbPath, dbName, el) {
         el.closest('.db-node')?.classList.add('active');
     }
 
-    loadMetadata();
-}
-
-function populateServerSelect(servers) {
-    const sel = document.getElementById('serverSelect');
-    sel.innerHTML = servers.map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('');
-    if (servers.length > 0) {
-        state.currentServer = servers[0].id;
-        onServerChange();
-    }
-}
-
-function onServerChange() {
-    const sid = document.getElementById('serverSelect').value;
-    state.currentServer = sid;
-    const srv = state.servers.find(s => s.id === sid);
-    const dbSel = document.getElementById('dbSelect');
-    if (srv) {
-        dbSel.innerHTML = srv.databases.map(db =>
-            `<option value="${esc(db.path)}">${esc(db.name)}</option>`
-        ).join('');
-        if (srv.databases.length > 0) {
-            state.currentDb = srv.databases[0].path;
-        }
-    }
-    loadMetadata();
-}
-
-function onDbChange() {
-    state.currentDb = document.getElementById('dbSelect').value;
     loadMetadata();
 }
 
@@ -1239,21 +1191,17 @@ function rerunHistory(id) {
         if (!h) return;
         state.editor.setValue(h.sql);
         switchTab('editor');
-        // set the server/db — rebuild dropdown without calling onServerChange()
-        // (which would reset currentDb to the first database)
+        // set the server/db
         if (h.server_id) {
             state.currentServer = h.server_id;
             state.currentDb = h.db_path;
-            const ss = document.getElementById('serverSelect');
-            ss.value = h.server_id;
-            const srv = state.servers.find(s => s.id === h.server_id);
-            const dbSel = document.getElementById('dbSelect');
-            if (srv) {
-                dbSel.innerHTML = srv.databases.map(db =>
-                    `<option value="${esc(db.path)}">${esc(db.name)}</option>`
-                ).join('');
+            // Update the current database label
+            const label = document.getElementById('currentDbLabel');
+            if (label) {
+                // Find the database name from allDbs
+                const db = state.allDbs.find(d => d.server_id === h.server_id && d.path === h.db_path);
+                label.textContent = db ? db.name : h.db_path;
             }
-            dbSel.value = h.db_path;
         }
         state.editor.focus();
     });
