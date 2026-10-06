@@ -74,6 +74,7 @@
         <div class="tab active" data-tab="editor" onclick="switchTab('editor')">Query Editor</div>
         <div class="tab" data-tab="history" onclick="switchTab('history')">History</div>
         <div class="tab" data-tab="scripts" onclick="switchTab('scripts')">Saved Scripts</div>
+        <div class="tab" data-tab="builder" onclick="switchTab('builder')">🧙 Query Builder</div>
         <div class="tab tab-tools" onclick="toggleToolsMenu(event)">🔧 Tools ▾</div>
     </div>
     <div class="tools-dropdown" id="toolsDropdown" style="display:none">
@@ -170,6 +171,77 @@
             <h3>Saved Scripts</h3>
         </div>
         <div id="scriptsList"></div>
+    </div>
+
+    <!-- Tab: Query Builder -->
+    <div class="tab-content" id="tab-builder">
+        <div class="qb-container">
+            <div class="qb-header">
+                <h3>🧙 Query Builder</h3>
+                <span class="qb-hint">Build queries visually — no SQL knowledge needed</span>
+            </div>
+
+            <!-- Step 1: Table selection -->
+            <div class="qb-section">
+                <div class="qb-section-title">📋 Tables</div>
+                <div class="qb-table-select">
+                    <select id="qbPrimaryTable" onchange="qbPrimaryTableChanged()">
+                        <option value="">— Select a table —</option>
+                    </select>
+                    <span class="qb-alias-label">Alias: <input type="text" id="qbPrimaryAlias" value="t1" class="qb-alias-input" oninput="qbUpdatePreview()"></span>
+                </div>
+                <div id="qbJoinList"></div>
+                <button class="btn btn-small btn-secondary" id="qbAddJoinBtn" onclick="qbAddJoin()" style="display:none">+ Add JOIN</button>
+            </div>
+
+            <!-- Step 2: Columns -->
+            <div class="qb-section" id="qbColumnsSection" style="display:none">
+                <div class="qb-section-title"> Columns <span class="qb-hint">(select which columns to show)</span></div>
+                <div id="qbColumnsList"></div>
+                <label class="qb-checkbox-line"><input type="checkbox" id="qbSelectAll" onchange="qbToggleSelectAll()"> Select all columns</label>
+            </div>
+
+            <!-- Step 3: Filters -->
+            <div class="qb-section" id="qbFiltersSection" style="display:none">
+                <div class="qb-section-title">🔍 Filters (WHERE)</div>
+                <div id="qbFilterList"></div>
+                <button class="btn btn-small btn-secondary" onclick="qbAddFilter()">+ Add Filter</button>
+            </div>
+
+            <!-- Step 4: Aggregates / GROUP BY -->
+            <div class="qb-section" id="qbAggSection" style="display:none">
+                <div class="qb-section-title">📊 Aggregates (GROUP BY)</div>
+                <div class="qb-agg-options">
+                    <label class="qb-checkbox-line"><input type="checkbox" id="qbEnableAgg" onchange="qbToggleAgg()"> Enable aggregates (COUNT, SUM, AVG, etc.)</label>
+                </div>
+                <div id="qbAggList"></div>
+                <div id="qbGroupByList"></div>
+            </div>
+
+            <!-- Step 5: Sort -->
+            <div class="qb-section" id="qbSortSection" style="display:none">
+                <div class="qb-section-title">↕ Sort (ORDER BY)</div>
+                <div id="qbSortList"></div>
+                <button class="btn btn-small btn-secondary" onclick="qbAddSort()">+ Add Sort Column</button>
+            </div>
+
+            <!-- Step 6: Limit -->
+            <div class="qb-section" id="qbLimitSection" style="display:none">
+                <div class="qb-section-title">🔢 Limit</div>
+                <label class="qb-checkbox-line"><input type="checkbox" id="qbEnableLimit" checked> Limit rows to: <input type="number" id="qbLimit" value="100" min="1" max="100000" class="qb-limit-input" oninput="qbUpdatePreview()"></label>
+            </div>
+
+            <!-- Preview -->
+            <div class="qb-preview-section">
+                <div class="qb-preview-header">
+                    <span>📝 Generated SQL</span>
+                    <button class="btn btn-small" onclick="qbCopyToEditor()">⬆ Send to Editor</button>
+                    <button class="btn btn-small btn-primary" onclick="qbRun()">▶ Run Query</button>
+                </div>
+                <div class="qb-sql-preview" id="qbSqlPreview">Select a table to begin…</div>
+                <div id="qbResults" style="display:none"></div>
+            </div>
+        </div>
     </div>
 </main>
 

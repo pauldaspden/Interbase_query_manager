@@ -20,10 +20,12 @@ document.addEventListener('DOMContentLoaded', () => {
     loadHistory();
     loadScriptsList();
     loadTheme();
-    // Transaction mode is on by default
-    state.inTransaction = true;
-    document.getElementById('btnCommit').style.display = '';
-    document.getElementById('btnRollback').style.display = '';
+    // Transaction mode — persisted in localStorage (on by default)
+    const txMode = localStorage.getItem('txMode') !== 'false';
+    state.inTransaction = txMode;
+    document.getElementById('txModeToggle').checked = txMode;
+    document.getElementById('btnCommit').style.display = txMode ? '' : 'none';
+    document.getElementById('btnRollback').style.display = txMode ? '' : 'none';
     loadUserInfo();
 
     // Ctrl+Enter or F6 to execute
@@ -408,8 +410,12 @@ async function loadMetadata() {
             tree.innerHTML = `<div class="error-msg">${esc(meta.error)}</div>`;
             return;
         }
-        state.metadata = meta;
-        renderMetadata(meta);
+        // API now returns { tables: [...], foreign_keys: [...] }
+        state.metadata = meta.tables || meta;
+        state.foreignKeys = meta.foreign_keys || [];
+        renderMetadata(state.metadata);
+        // Notify query builder if it's open
+        if (typeof onMetadataLoaded === 'function') onMetadataLoaded();
     } catch (e) {
         tree.innerHTML = `<div class="error-msg">${esc(e.message)}</div>`;
     }
@@ -538,11 +544,8 @@ function toggleTxMode() {
     const checked = document.getElementById('txModeToggle').checked;
     document.getElementById('btnCommit').style.display = checked ? '' : 'none';
     document.getElementById('btnRollback').style.display = checked ? '' : 'none';
-    if (checked) {
-        state.inTransaction = true;
-    } else {
-        state.inTransaction = false;
-    }
+    state.inTransaction = checked;
+    localStorage.setItem('txMode', checked ? 'true' : 'false');
 }
 
 async function commitTransaction() {
@@ -557,8 +560,7 @@ async function commitTransaction() {
         });
         if (res.ok) {
             alert('✅ Changes committed successfully');
-            document.getElementById('txModeToggle').checked = false;
-            toggleTxMode();
+            // Keep transaction mode ON — stay in manual transaction mode
         } else {
             alert('Commit failed: ' + (res.error || 'Unknown error'));
         }
@@ -580,8 +582,7 @@ async function rollbackTransaction() {
         });
         if (res.ok) {
             alert('↩ Changes rolled back successfully');
-            document.getElementById('txModeToggle').checked = false;
-            toggleTxMode();
+            // Keep transaction mode ON — stay in manual transaction mode
         } else {
             alert('Rollback failed: ' + (res.error || 'Unknown error'));
         }
@@ -1606,6 +1607,7 @@ function switchTab(tab) {
     if (state.editor) setTimeout(() => state.editor.refresh(), 10);
     if (state.multiEditor) setTimeout(() => state.multiEditor.refresh(), 10);
     if (tab === 'history') loadHistory();
+    if (tab === 'builder') qbPopulateTables();
     if (tab === 'scripts') loadScriptsList();
 }
 
@@ -1662,7 +1664,7 @@ async function restartServer() {
 
     // Poll until server comes back
     let attempts = 0;
-    const maxAttempts = 30;
+    const maxAttempts = 90;
     const statusEl = document.getElementById('restartStatus');
 
     const poll = setInterval(async () => {
@@ -1683,7 +1685,7 @@ async function restartServer() {
         }
         if (attempts >= maxAttempts) {
             clearInterval(poll);
-            if (statusEl) statusEl.textContent = 'Server took too long. Close this window and run start.bat again.';
+            if (statusEl) statusEl.textContent = 'Server took too long. Refresh the page manually.';
         }
     }, 1000);
 }
@@ -1694,4 +1696,650 @@ function esc(s) {
     const d = document.createElement('div');
     d.textContent = String(s);
     return d.innerHTML;
+}
+
+// ════════════════════════════════════════════════════════════════
+// ── Query Builder ───────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════════
+
+// Query builder state
+let qb = {
+    primaryTable: '',
+    primaryAlias: 't1',
+    joins: [],        // [{ table, alias, joinType, fromColumn, toColumn }]
+    selectedColumns: [], // [{ table, column, alias }]
+    filters: [],      // [{ column, op, value, connector }]
+    aggregates: [],   // [{ fn, column, alias }]
+    groupBy: [],      // [{ column }]
+    sortColumns: [],  // [{ column, direction }]
+    enableLimit: true,
+    limit: 100,
+    enableAgg: false,
+};
+
+let _qbAliasCounter = 1;
+
+function onMetadataLoaded() {
+    // Populate table dropdown when metadata is loaded
+    qbPopulateTables();
+}
+
+function qbPopulateTables() {
+    const sel = document.getElementById('qbPrimaryTable');
+    if (!sel) return;
+    const meta = state.metadata || [];
+    sel.innerHTML = '<option value="">— Select a table —</option>' +
+        meta.map(t => `<option value="${esc(t.name)}">${esc(t.name)} (${t.type})</option>`).join('');
+    // Reset join counter when tables reload
+    _qbAliasCounter = 1;
+}
+
+function qbGetTableMeta(tableName) {
+    const meta = state.metadata || [];
+    return meta.find(t => t.name === tableName);
+}
+
+function qbGetTableColumns(tableName) {
+    const t = qbGetTableMeta(tableName);
+    return t ? (t.columns || []) : [];
+}
+
+function qbGetAliases() {
+    const aliases = [{ table: qb.primaryTable, alias: qb.primaryAlias }];
+    qb.joins.forEach(j => aliases.push({ table: j.table, alias: j.alias }));
+    return aliases;
+}
+
+function qbNextAlias() {
+    _qbAliasCounter++;
+    return 't' + _qbAliasCounter;
+}
+
+function qbPrimaryTableChanged() {
+    const sel = document.getElementById('qbPrimaryTable');
+    qb.primaryTable = sel.value;
+    _qbAliasCounter = 1;
+    qb.primaryAlias = 't1';
+    document.getElementById('qbPrimaryAlias').value = 't1';
+    qb.joins = [];
+    qb.selectedColumns = [];
+    qb.filters = [];
+    qb.aggregates = [];
+    qb.groupBy = [];
+    qb.sortColumns = [];
+
+    if (qb.primaryTable) {
+        document.getElementById('qbColumnsSection').style.display = '';
+        document.getElementById('qbFiltersSection').style.display = '';
+        document.getElementById('qbAggSection').style.display = '';
+        document.getElementById('qbSortSection').style.display = '';
+        document.getElementById('qbLimitSection').style.display = '';
+        document.getElementById('qbAddJoinBtn').style.display = '';
+        qbRenderColumns();
+        qbRenderJoinList();
+    } else {
+        document.getElementById('qbColumnsSection').style.display = 'none';
+        document.getElementById('qbFiltersSection').style.display = 'none';
+        document.getElementById('qbAggSection').style.display = 'none';
+        document.getElementById('qbSortSection').style.display = 'none';
+        document.getElementById('qbLimitSection').style.display = 'none';
+        document.getElementById('qbAddJoinBtn').style.display = 'none';
+        document.getElementById('qbJoinList').innerHTML = '';
+    }
+    qbUpdatePreview();
+}
+
+function qbRenderJoinList() {
+    const container = document.getElementById('qbJoinList');
+    container.innerHTML = qb.joins.map((j, i) => {
+        return `<div class="qb-join-row">
+            <span class="qb-join-type">${esc(j.joinType)}</span>
+            <select onchange="qbJoinTableChanged(${i}, this.value)">
+                <option value="">— table —</option>
+                ${(state.metadata || []).map(t => `<option value="${esc(t.name)}" ${t.name === j.table ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}
+            </select>
+            <span>ON</span>
+            <select class="qb-join-col" onchange="qbJoinFromChanged(${i}, this.value)">
+                <option value="">— column —</option>
+                ${qbGetTableColumns(qb.primaryTable).map(c => `<option value="${esc(c.name)}" ${c.name === j.fromColumn ? 'selected' : ''}>${esc(qb.primaryAlias)}.${esc(c.name)}</option>`).join('')}
+            </select>
+            <span>=</span>
+            <select class="qb-join-col" onchange="qbJoinToChanged(${i}, this.value)">
+                <option value="">— column —</option>
+                ${j.table ? qbGetTableColumns(j.table).map(c => `<option value="${esc(c.name)}" ${c.name === j.toColumn ? 'selected' : ''}>${esc(j.alias)}.${esc(c.name)}</option>`).join('') : ''}
+            </select>
+            <input type="text" class="qb-alias-input" value="${esc(j.alias)}" title="Alias" readonly>
+            <button class="qb-join-remove" onclick="qbRemoveJoin(${i})">✕ Remove</button>
+            ${qbGetJoinSuggestion(i, j)}
+        </div>`;
+    }).join('');
+}
+
+function qbGetJoinSuggestion(i, join) {
+    if (!state.foreignKeys || state.foreignKeys.length === 0) return '';
+    // Find FKs that match this join
+    const suggestions = state.foreignKeys.filter(fk =>
+        (fk.from_table === qb.primaryTable && fk.to_table === join.table) ||
+        (fk.from_table === join.table && fk.to_table === qb.primaryTable)
+    );
+    if (suggestions.length === 0) return '';
+    return `<div class="qb-join-suggestion">💡 Suggested: ${suggestions.map(s =>
+        `${esc(s.from_table)}.${esc(s.from_column)} → ${esc(s.to_table)} (FK)`
+    ).join(', ')}</div>`;
+}
+
+function qbAddJoin() {
+    if (!qb.primaryTable) return;
+    const alias = qbNextAlias();
+    qb.joins.push({
+        table: '',
+        alias: alias,
+        joinType: 'INNER JOIN',
+        fromColumn: '',
+        toColumn: '',
+    });
+    qbRenderJoinList();
+    qbUpdatePreview();
+}
+
+function qbRemoveJoin(i) {
+    qb.joins.splice(i, 1);
+    qbRenderJoinList();
+    qbUpdatePreview();
+}
+
+function qbJoinTableChanged(i, val) {
+    qb.joins[i].table = val;
+    qb.joins[i].toColumn = '';
+    qbRenderJoinList();
+    qbRenderColumns();
+    qbUpdatePreview();
+}
+
+function qbJoinFromChanged(i, val) {
+    qb.joins[i].fromColumn = val;
+    qbUpdatePreview();
+}
+
+function qbJoinToChanged(i, val) {
+    qb.joins[i].toColumn = val;
+    qbUpdatePreview();
+}
+
+function qbRenderColumns() {
+    const container = document.getElementById('qbColumnsList');
+    if (!container) return;
+    let html = '';
+
+    // Columns from primary table
+    const primaryCols = qbGetTableColumns(qb.primaryTable);
+    if (primaryCols.length > 0) {
+        html += `<div style="margin-bottom:8px;font-size:12px;color:var(--text-dim)">${esc(qb.primaryAlias)} — ${esc(qb.primaryTable)}</div>`;
+        html += '<div class="qb-columns-grid">';
+        primaryCols.forEach(col => {
+            const checked = qbIsColumnSelected(qb.primaryTable, col.name);
+            html += `<label class="qb-col-checkbox">
+                <input type="checkbox" ${checked ? 'checked' : ''} onchange="qbToggleColumn('${esc(qb.primaryTable)}','${esc(col.name)}', this.checked)">
+                <span>${esc(col.name)}</span>
+                <span class="qb-col-type">${esc(col.type)}</span>
+            </label>`;
+        });
+        html += '</div>';
+    }
+
+    // Columns from joined tables
+    qb.joins.forEach((j, idx) => {
+        if (!j.table) return;
+        const cols = qbGetTableColumns(j.table);
+        if (cols.length === 0) return;
+        html += `<div style="margin:8px 0 4px;font-size:12px;color:var(--text-dim)">${esc(j.alias)} — ${esc(j.table)}</div>`;
+        html += '<div class="qb-columns-grid">';
+        cols.forEach(col => {
+            const checked = qbIsColumnSelected(j.table, col.name);
+            html += `<label class="qb-col-checkbox">
+                <input type="checkbox" ${checked ? 'checked' : ''} onchange="qbToggleColumn('${esc(j.table)}','${esc(col.name)}', this.checked)">
+                <span>${esc(col.name)}</span>
+                <span class="qb-col-type">${esc(col.type)}</span>
+            </label>`;
+        });
+        html += '</div>';
+    });
+
+    container.innerHTML = html || '<span class="muted">No columns available</span>';
+}
+
+function qbIsColumnSelected(table, col) {
+    return qb.selectedColumns.some(c => c.table === table && c.column === col);
+}
+
+function qbToggleColumn(table, col, checked) {
+    if (checked) {
+        if (!qbIsColumnSelected(table, col)) {
+            qb.selectedColumns.push({ table, column: col, alias: '' });
+        }
+    } else {
+        qb.selectedColumns = qb.selectedColumns.filter(c => !(c.table === table && c.column === col));
+    }
+    qbUpdatePreview();
+}
+
+function qbToggleSelectAll() {
+    const checked = document.getElementById('qbSelectAll').checked;
+    qb.selectedColumns = [];
+    if (checked) {
+        // Select all from primary table
+        qbGetTableColumns(qb.primaryTable).forEach(col => {
+            qb.selectedColumns.push({ table: qb.primaryTable, column: col.name, alias: '' });
+        });
+        // Select all from joined tables
+        qb.joins.forEach(j => {
+            if (j.table) {
+                qbGetTableColumns(j.table).forEach(col => {
+                    qb.selectedColumns.push({ table: j.table, column: col.name, alias: '' });
+                });
+            }
+        });
+    }
+    qbRenderColumns();
+    qbUpdatePreview();
+}
+
+function qbAddFilter() {
+    qb.filters.push({ column: '', op: '=', value: '', connector: 'AND' });
+    qbRenderFilters();
+    qbUpdatePreview();
+}
+
+function qbRemoveFilter(i) {
+    qb.filters.splice(i, 1);
+    qbRenderFilters();
+    qbUpdatePreview();
+}
+
+function qbRenderFilters() {
+    const container = document.getElementById('qbFilterList');
+    if (!container) return;
+    if (qb.filters.length === 0) {
+        container.innerHTML = '<span class="muted">No filters — click "Add Filter" to narrow results</span>';
+        return;
+    }
+    // Build column options from all available tables
+    const colOptions = qbGetAliasColumnOptions();
+
+    container.innerHTML = qb.filters.map((f, i) => {
+        return `<div class="qb-filter-row">
+            ${i > 0 ? `<select class="qb-filter-andor" onchange="qbFilterConnectorChanged(${i}, this.value)">
+                <option value="AND" ${f.connector === 'AND' ? 'selected' : ''}>AND</option>
+                <option value="OR" ${f.connector === 'OR' ? 'selected' : ''}>OR</option>
+            </select>` : ''}
+            <select class="qb-filter-col" onchange="qbFilterColChanged(${i}, this.value)">
+                <option value="">— column —</option>
+                ${colOptions.map(c => `<option value="${esc(c.value)}" ${f.column === c.value ? 'selected' : ''}>${esc(c.label)}</option>`).join('')}
+            </select>
+            <select class="qb-filter-op" onchange="qbFilterOpChanged(${i}, this.value)">
+                ${['=', '!=', '<', '>', '<=', '>=', 'LIKE', 'NOT LIKE', 'IS NULL', 'IS NOT NULL', 'IN'].map(op =>
+                    `<option value="${op}" ${f.op === op ? 'selected' : ''}>${op}</option>`
+                ).join('')}
+            </select>
+            ${f.op !== 'IS NULL' && f.op !== 'IS NOT NULL' ?
+                `<input type="text" class="qb-filter-val" placeholder="value" value="${esc(f.value)}" oninput="qbFilterValChanged(${i}, this.value)">` :
+                ''}
+            <button class="qb-filter-remove" onclick="qbRemoveFilter(${i})">✕</button>
+        </div>`;
+    }).join('');
+}
+
+function qbFilterColChanged(i, val) { qb.filters[i].column = val; qbUpdatePreview(); }
+function qbFilterOpChanged(i, val) { qb.filters[i].op = val; qbRenderFilters(); qbUpdatePreview(); }
+function qbFilterValChanged(i, val) { qb.filters[i].value = val; qbUpdatePreview(); }
+function qbFilterConnectorChanged(i, val) { qb.filters[i].connector = val; qbUpdatePreview(); }
+
+function qbGetAliasColumnOptions() {
+    const opts = [];
+    // Primary table columns
+    if (qb.primaryTable) {
+        qbGetTableColumns(qb.primaryTable).forEach(col => {
+            opts.push({ value: `${qb.primaryAlias}.${col.name}`, label: `${qb.primaryAlias}.${col.name} (${qb.primaryTable})` });
+        });
+    }
+    // Joined table columns
+    qb.joins.forEach(j => {
+        if (!j.table) return;
+        qbGetTableColumns(j.table).forEach(col => {
+            opts.push({ value: `${j.alias}.${col.name}`, label: `${j.alias}.${col.name} (${j.table})` });
+        });
+    });
+    return opts;
+}
+
+function qbGetColumnForAlias(alias) {
+    const aliases = qbGetAliases();
+    const match = aliases.find(a => `${a.alias}` === alias);
+    return match;
+}
+
+function qbToggleAgg() {
+    qb.enableAgg = document.getElementById('qbEnableAgg').checked;
+    if (qb.enableAgg) {
+        qbRenderAggregates();
+        qbRenderGroupBy();
+    } else {
+        document.getElementById('qbAggList').innerHTML = '';
+        document.getElementById('qbGroupByList').innerHTML = '';
+    }
+    qbUpdatePreview();
+}
+
+function qbAddAggregate() {
+    qb.aggregates.push({ fn: 'COUNT', column: '*', alias: 'cnt' });
+    qbRenderAggregates();
+    qbUpdatePreview();
+}
+
+function qbRemoveAggregate(i) {
+    qb.aggregates.splice(i, 1);
+    qbRenderAggregates();
+    qbUpdatePreview();
+}
+
+function qbRenderAggregates() {
+    const container = document.getElementById('qbAggList');
+    if (!container) return;
+    if (qb.aggregates.length === 0 && qb.enableAgg) {
+        container.innerHTML = '<span class="muted">No aggregates — click below to add COUNT, SUM, AVG, etc.</span>';
+        container.innerHTML += '<div style="margin-top:8px"><button class="btn btn-small btn-secondary" onclick="qbAddAggregate()">+ Add Aggregate</button></div>';
+        return;
+    }
+    const colOptions = qbGetAliasColumnOptions();
+    container.innerHTML = qb.aggregates.map((a, i) => {
+        return `<div class="qb-agg-row">
+            <select class="qb-agg-fn" onchange="qbAggFnChanged(${i}, this.value)">
+                ${['COUNT', 'SUM', 'AVG', 'MIN', 'MAX'].map(fn =>
+                    `<option value="${fn}" ${a.fn === fn ? 'selected' : ''}>${fn}</option>`
+                ).join('')}
+            </select>
+            <span>(</span>
+            <select class="qb-agg-col" onchange="qbAggColChanged(${i}, this.value)">
+                <option value="*" ${a.column === '*' ? 'selected' : ''}>* (all)</option>
+                ${colOptions.map(c => `<option value="${esc(c.value)}" ${a.column === c.value ? 'selected' : ''}>${esc(c.label)}</option>`).join('')}
+            </select>
+            <span>) AS</span>
+            <input type="text" class="qb-agg-alias" value="${esc(a.alias)}" oninput="qbAggAliasChanged(${i}, this.value)">
+            <button class="qb-agg-remove" onclick="qbRemoveAggregate(${i})">✕</button>
+        </div>`;
+    }).join('') + (qb.enableAgg ? '<div style="margin-top:8px"><button class="btn btn-small btn-secondary" onclick="qbAddAggregate()">+ Add Aggregate</button></div>' : '');
+}
+
+function qbAggFnChanged(i, val) { qb.aggregates[i].fn = val; qbUpdatePreview(); }
+function qbAggColChanged(i, val) { qb.aggregates[i].column = val; qbUpdatePreview(); }
+function qbAggAliasChanged(i, val) { qb.aggregates[i].alias = val; qbUpdatePreview(); }
+
+function qbRenderGroupBy() {
+    const container = document.getElementById('qbGroupByList');
+    if (!container) return;
+    if (!qb.enableAgg) { container.innerHTML = ''; return; }
+    const colOptions = qbGetAliasColumnOptions();
+    if (qb.groupBy.length === 0) {
+        container.innerHTML = '<span class="muted">GROUP BY columns (optional — auto-selected from non-aggregate columns)</span>';
+    } else {
+        container.innerHTML = '<div class="qb-section-title" style="margin-top:12px">Group By</div>' +
+            qb.groupBy.map((g, i) => `<div class="qb-agg-row">
+                <select class="qb-agg-col" onchange="qbGroupByColChanged(${i}, this.value)">
+                    <option value="">— column —</option>
+                    ${colOptions.map(c => `<option value="${esc(c.value)}" ${g.column === c.value ? 'selected' : ''}>${esc(c.label)}</option>`).join('')}
+                </select>
+                <button class="qb-agg-remove" onclick="qbRemoveGroupBy(${i})">✕</button>
+            </div>`).join('');
+    }
+}
+
+function qbAddGroupBy() {
+    qb.groupBy.push({ column: '' });
+    qbRenderGroupBy();
+    qbUpdatePreview();
+}
+
+function qbRemoveGroupBy(i) {
+    qb.groupBy.splice(i, 1);
+    qbRenderGroupBy();
+    qbUpdatePreview();
+}
+
+function qbGroupByColChanged(i, val) { qb.groupBy[i].column = val; qbUpdatePreview(); }
+
+function qbAddSort() {
+    qb.sortColumns.push({ column: '', direction: 'ASC' });
+    qbRenderSort();
+    qbUpdatePreview();
+}
+
+function qbRemoveSort(i) {
+    qb.sortColumns.splice(i, 1);
+    qbRenderSort();
+    qbUpdatePreview();
+}
+
+function qbRenderSort() {
+    const container = document.getElementById('qbSortList');
+    if (!container) return;
+    if (qb.sortColumns.length === 0) {
+        container.innerHTML = '<span class="muted">No sort — click "Add Sort Column" to order results</span>';
+        return;
+    }
+    const colOptions = qbGetAliasColumnOptions();
+    container.innerHTML = qb.sortColumns.map((s, i) => {
+        return `<div class="qb-sort-row">
+            <select onchange="qbSortColChanged(${i}, this.value)">
+                <option value="">— column —</option>
+                ${colOptions.map(c => `<option value="${esc(c.value)}" ${s.column === c.value ? 'selected' : ''}>${esc(c.label)}</option>`).join('')}
+            </select>
+            <select onchange="qbSortDirChanged(${i}, this.value)">
+                <option value="ASC" ${s.direction === 'ASC' ? 'selected' : ''}>ASC (ascending)</option>
+                <option value="DESC" ${s.direction === 'DESC' ? 'selected' : ''}>DESC (descending)</option>
+            </select>
+            <button class="qb-sort-remove" onclick="qbRemoveSort(${i})">✕</button>
+        </div>`;
+    }).join('');
+}
+
+function qbSortColChanged(i, val) { qb.sortColumns[i].column = val; qbUpdatePreview(); }
+function qbSortDirChanged(i, val) { qb.sortColumns[i].direction = val; qbUpdatePreview(); }
+
+// ── SQL Generation ──────────────────────────────────────────────
+
+function qbGenerateSQL() {
+    if (!qb.primaryTable) return '';
+
+    let sql = 'SELECT\n';
+
+    // SELECT columns
+    if (qb.enableAgg && qb.aggregates.length > 0) {
+        // Aggregate mode: selected non-aggregate columns + aggregate columns
+        const nonAggCols = [];
+        const aggCols = qb.aggregates.map(a => {
+            const col = a.column === '*' ? '*' : a.column;
+            return `  ${a.fn}(${col}) AS ${a.alias}`;
+        });
+        // If groupBy is specified, use those; otherwise auto-select non-agg columns
+        const groupCols = qb.groupBy.filter(g => g.column).map(g => g.column);
+        if (groupCols.length > 0) {
+            groupCols.forEach(c => nonAggCols.push(`  ${c}`));
+        } else if (qb.selectedColumns.length > 0) {
+            qb.selectedColumns.forEach(c => {
+                const alias = qbGetAliasForTable(c.table);
+                if (alias) nonAggCols.push(`  ${alias}.${c.column}`);
+            });
+        }
+        sql += nonAggCols.concat(aggCols).join(',\n');
+    } else if (qb.selectedColumns.length > 0) {
+        const cols = qb.selectedColumns.map(c => {
+            const alias = qbGetAliasForTable(c.table);
+            return `  ${alias}.${c.column}`;
+        });
+        sql += cols.join(',\n');
+    } else {
+        sql += '  *';
+    }
+
+    // FROM
+    sql += `\nFROM ${qb.primaryTable} ${qb.primaryAlias}`;
+
+    // JOINs
+    qb.joins.forEach(j => {
+        if (j.table && j.fromColumn && j.toColumn) {
+            sql += `\n${j.joinType} ${j.table} ${j.alias} ON ${qb.primaryAlias}.${j.fromColumn} = ${j.alias}.${j.toColumn}`;
+        } else if (j.table) {
+            sql += `\n${j.joinType} ${j.table} ${j.alias} ON -- TODO: select join columns`;
+        }
+    });
+
+    // WHERE
+    const validFilters = qb.filters.filter(f => f.column && f.op);
+    if (validFilters.length > 0) {
+        sql += '\nWHERE ';
+        sql += validFilters.map((f, i) => {
+            let clause = '';
+            if (i > 0) clause += f.connector + ' ';
+            if (f.op === 'IS NULL' || f.op === 'IS NOT NULL') {
+                clause += `${f.column} ${f.op}`;
+            } else if (f.op === 'IN') {
+                clause += `${f.column} IN (${f.value})`;
+            } else if (f.op === 'LIKE' || f.op === 'NOT LIKE') {
+                clause += `${f.column} ${f.op} '${f.value.replace(/'/g, "''")}'`;
+            } else {
+                // Try to detect if value is numeric
+                const val = f.value.replace(/'/g, "''");
+                if (val.match(/^-?\d+\.?\d*$/)) {
+                    clause += `${f.column} ${f.op} ${val}`;
+                } else {
+                    clause += `${f.column} ${f.op} '${val}'`;
+                }
+            }
+            return clause;
+        }).join(' ');
+    }
+
+    // GROUP BY
+    if (qb.enableAgg) {
+        const groupCols = qb.groupBy.filter(g => g.column);
+        if (groupCols.length > 0) {
+            sql += '\nGROUP BY ' + groupCols.map(g => g.column).join(', ');
+        }
+    }
+
+    // ORDER BY
+    const validSort = qb.sortColumns.filter(s => s.column);
+    if (validSort.length > 0) {
+        sql += '\nORDER BY ' + validSort.map(s => `${s.column} ${s.direction}`).join(', ');
+    }
+
+    // LIMIT
+    if (qb.enableLimit) {
+        const limitVal = document.getElementById('qbLimit') ? document.getElementById('qbLimit').value : qb.limit;
+        sql += `\n-- Limit: ${limitVal} (applied by app)`;
+    }
+
+    return sql;
+}
+
+function qbGetAliasForTable(table) {
+    if (table === qb.primaryTable) return qb.primaryAlias;
+    const join = qb.joins.find(j => j.table === table);
+    return join ? join.alias : null;
+}
+
+function qbUpdatePreview() {
+    const preview = document.getElementById('qbSqlPreview');
+    if (!preview) return;
+    const sql = qbGenerateSQL();
+    if (sql) {
+        preview.textContent = sql;
+        preview.style.color = 'var(--text)';
+    } else {
+        preview.textContent = 'Select a table to begin…';
+        preview.style.color = 'var(--text-muted)';
+    }
+
+    // Update enable limit checkbox
+    const enableLimitCb = document.getElementById('qbEnableLimit');
+    if (enableLimitCb) qb.enableLimit = enableLimitCb.checked;
+
+    // Update render of filters and sort
+    if (document.getElementById('qbFilterList')) qbRenderFilters();
+    if (document.getElementById('qbSortList')) qbRenderSort();
+    if (qb.enableAgg) {
+        qbRenderAggregates();
+        qbRenderGroupBy();
+    }
+}
+
+function qbCopyToEditor() {
+    const sql = qbGenerateSQL();
+    if (!sql) return;
+    if (state.editor) {
+        state.editor.setValue(sql);
+    }
+    switchTab('editor');
+}
+
+async function qbRun() {
+    const sql = qbGenerateSQL();
+    if (!sql) {
+        alert('Select a table first');
+        return;
+    }
+    if (!state.currentServer || !state.currentDb) {
+        alert('Select a database in the sidebar first');
+        return;
+    }
+    const resultsDiv = document.getElementById('qbResults');
+    resultsDiv.style.display = '';
+    resultsDiv.innerHTML = '<p class="muted loading">Running query…</p>';
+
+    const maxRows = qb.enableLimit ? (document.getElementById('qbLimit')?.value || 100) : 1000;
+
+    try {
+        const res = await api('/api/query', {
+            method: 'POST',
+            body: JSON.stringify({
+                server_id: state.currentServer,
+                db_path: state.currentDb,
+                sql: sql,
+                max_rows: parseInt(maxRows),
+                in_transaction: true,
+            }),
+        });
+        if (res.error) {
+            resultsDiv.innerHTML = `<div class="error-msg">${esc(res.error)}</div>`;
+        } else if (res.columns) {
+            renderQbResults(res, resultsDiv);
+        } else if (res.rows_affected !== undefined) {
+            resultsDiv.innerHTML = `<p>${res.rows_affected} rows affected</p>`;
+        }
+    } catch (e) {
+        resultsDiv.innerHTML = `<div class="error-msg">${esc(e.message)}</div>`;
+    }
+}
+
+function renderQbResults(res, container) {
+    const cols = res.columns || [];
+    const rows = res.rows || [];
+    if (rows.length === 0) {
+        container.innerHTML = '<p class="muted">No rows returned</p>';
+        return;
+    }
+    let html = `<div style="margin:8px 0;font-size:12px;color:var(--text-dim)">${rows.length} rows · ${res.elapsed || 0}s</div>`;
+    html += '<div class="results-table-wrap"><table class="results-table"><thead><tr>';
+    cols.forEach(c => html += `<th>${esc(c)}</th>`);
+    html += '</tr></thead><tbody>';
+    rows.forEach(row => {
+        html += '<tr>';
+        cols.forEach((c, ci) => {
+            const v = row[ci];
+            html += `<td>${v === null ? '<span class="null-val">NULL</span>' : esc(String(v))}</td>`;
+        });
+        html += '</tr>';
+    });
+    html += '</tbody></table></div>';
+    container.innerHTML = html;
 }

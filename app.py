@@ -630,8 +630,9 @@ def api_users():
         try:
             conn = _get_auth_conn()
             cur = conn.cursor()
+            hashed_pw = _hash_passwd(new_pw)
             cur.execute(
-                "UPDATE MEMBERS_ SET PASSWD = '" + new_pw.replace("'", "''") + "' "
+                "UPDATE MEMBERS_ SET PASSWD = '" + hashed_pw.replace("'", "''") + "' "
                 "WHERE UPPER(USERNAME) = '" + pw_user.upper().replace("'", "''") + "'"
             )
             conn.commit()
@@ -651,7 +652,7 @@ def api_users():
             cur = conn.cursor()
             cur.execute(
                 "INSERT INTO MEMBERS_ (USERNAME, PASSWD) VALUES ('"
-                + new_user.replace("'", "''") + "', '" + new_pw.replace("'", "''") + "')"
+                + new_user.replace("'", "''") + "', '" + _hash_passwd(new_pw) + "')"
             )
             conn.commit()
             cur.close()
@@ -1061,8 +1062,62 @@ def api_metadata(server_id):
         for rel in relations:
             rel["primary_key"] = pk_map.get(rel["name"], [])
 
+        # Foreign keys — for JOIN suggestions in the Query Builder
+        fk_list = []
+        try:
+            cur.execute(
+                "SELECT rc.RDB$RELATION_NAME, "
+                "rc.RDB$CONSTRAINT_NAME, "
+                "fc.RDB$FIELD_NAME, "
+                "rcref.RDB$CONSTRAINT_NAME, "
+                "rcref.RDB$RELATION_NAME "
+                "FROM RDB$RELATION_CONSTRAINTS rc "
+                "JOIN RDB$REFINING_CONSTRAINTS rcref "
+                "  ON rc.RDB$CONSTRAINT_NAME = rcref.RDB$CONSTRAINT_NAME "
+                "  AND rc.RDB$CONSTRAINT_TYPE = 'FOREIGN KEY' "
+                "JOIN RDB$RELATION_CONSTRAINTS fc "
+                "  ON rcref.RDB$CONSTRAINT_NAME = fc.RDB$CONSTRAINT_NAME "
+                "WHERE rc.RDB$CONSTRAINT_TYPE = 'FOREIGN KEY'"
+            )
+            for row in cur.fetchall():
+                fk_list.append({
+                    "from_table": row[0].strip() if row[0] else "",
+                    "from_column": row[2].strip() if row[2] else "",
+                    "to_table": row[4].strip() if row[4] else "",
+                })
+        except Exception:
+            pass
+
+        # Also try the simpler RDB$INDICES approach as a fallback
+        if not fk_list:
+            try:
+                cur.execute(
+                    "SELECT i.RDB$RELATION_NAME, "
+                    "i.RDB$FOREIGN_KEY, "
+                    "ix.RDB$FIELD_NAME, "
+                    "ix2.RDB$FIELD_NAME, "
+                    "i2.RDB$RELATION_NAME "
+                    "FROM RDB$INDICES i "
+                    "JOIN RDB$INDEX_SEGMENTS ix "
+                    "  ON i.RDB$INDEX_NAME = ix.RDB$INDEX_NAME "
+                    "JOIN RDB$INDICES i2 "
+                    "  ON i.RDB$FOREIGN_KEY = i2.RDB$INDEX_NAME "
+                    "JOIN RDB$INDEX_SEGMENTS ix2 "
+                    "  ON i2.RDB$INDEX_NAME = ix2.RDB$INDEX_NAME "
+                    "WHERE i.RDB$FOREIGN_KEY IS NOT NULL"
+                )
+                for row in cur.fetchall():
+                    fk_list.append({
+                        "from_table": row[0].strip() if row[0] else "",
+                        "from_column": row[2].strip() if row[2] else "",
+                        "to_table": row[4].strip() if row[4] else "",
+                    })
+            except Exception:
+                pass
+
+        result = {"tables": relations, "foreign_keys": fk_list}
         cur.close()
-        return jsonify(json_safe(relations))
+        return jsonify(json_safe(result))
 
     except Exception as e:
         return jsonify({"error": f"Schema query failed: {e}"}), 500
@@ -1342,7 +1397,8 @@ def api_commit():
     try:
         conn = cm.get(server_id, db_path, creds["username"], creds["password"])
         conn.commit()
-        conn.set_autocommit(True)  # back to normal mode
+        # Keep transaction mode ON — do not revert to autocommit
+        conn.set_autocommit(False)
         return jsonify({"ok": True, "message": "Changes committed successfully"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -1360,7 +1416,8 @@ def api_rollback():
     try:
         conn = cm.get(server_id, db_path, creds["username"], creds["password"])
         conn.rollback()
-        conn.set_autocommit(True)  # back to normal mode
+        # Keep transaction mode ON — do not revert to autocommit
+        conn.set_autocommit(False)
         return jsonify({"ok": True, "message": "Changes rolled back successfully"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -1686,14 +1743,13 @@ def api_shutdown():
 def api_restart():
     """Restart the Flask server.
 
-    Writes a flag file that start.bat watches, then exits.
-    start.bat will restart the server automatically.
-    Also works with os.execv as a fallback.
+    Works in two modes:
+    - Scheduled task: exits; the task's restart-on-failure relaunches it.
+    - start.bat: writes .restart_flag, then exits; start.bat restarts it.
     """
     cm.close_all()
 
-    # Write a restart flag file so the launcher knows to restart
-    # (rather than just exiting)
+    # Write a restart flag file so start.bat knows to restart (if running that way)
     restart_flag = os.path.join(BASE_DIR, ".restart_flag")
     try:
         with open(restart_flag, "w") as f:
@@ -1711,8 +1767,10 @@ def api_restart():
             cm.close_all()
         except Exception:
             pass
-        # Use os._exit to force-kill the process; start.bat will restart it
-        os._exit(0)
+        # Exit with non-zero code so:
+        # - Scheduled task: "restart on failure" relaunches within 1 minute
+        # - start.bat: .restart_flag triggers the restart loop
+        os._exit(1)
 
     t = _threading.Thread(target=_do_restart, daemon=True)
     t.start()
