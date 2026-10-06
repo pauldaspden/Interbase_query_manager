@@ -2,3 +2,6 @@ __pycache__/
 *.pyc
 saved/history.json
 config.json.bak
+config.json
+.restart_flag
+*.log
