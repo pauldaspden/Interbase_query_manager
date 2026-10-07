@@ -698,6 +698,8 @@ function renderResultsPage(pageRows) {
     const panel = document.getElementById('resultsPanel');
     panel.style.display = 'flex';
     const s = resultsState;
+    // Store current page rows for re-rendering after column reordering
+    s.currentPageRows = pageRows;
 
     const colOrder = s.colOrder || s.columns.map((_, i) => i);
     const truncated = s.truncated ? ' <span style="color:var(--warning)">(truncated)</span>' : '';
@@ -855,7 +857,7 @@ function initColumnDrag() {
                 const target = s.colOrder.indexOf(toIdx);
                 s.colOrder.splice(moved, 1);
                 s.colOrder.splice(target, 0, fromIdx);
-                renderResultsPage();
+                renderResultsPage(s.currentPageRows || []);
             } else {
                 // Query Builder or standalone table — reorder DOM directly
                 reorderTableColumns(fromIdx, toIdx);
