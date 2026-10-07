@@ -595,6 +595,34 @@ def api_user():
         return jsonify({"user": user})
     return jsonify({"user": None}), 401
 
+@login_required
+@app.route("/api/connections")
+def api_connections():
+    """Debug endpoint — show open connections (admin only)."""
+    user = get_current_user()
+    if not user or not user.get("admin"):
+        return jsonify({"error": "Admin access required"}), 403
+    now = time.time()
+    conns = []
+    with cm._lock:
+        for key, conn in cm._conns.items():
+            server_id, db_path = key
+            last_used = _connection_last_used.get(key, 0)
+            idle_secs = round(now - last_used, 1)
+            conns.append({
+                "server_id": server_id,
+                "db_path": db_path,
+                "idle_seconds": idle_secs,
+                "timeout": CONNECTION_IDLE_TIMEOUT,
+                "will_close_in_secs": max(0, round(CONNECTION_IDLE_TIMEOUT - idle_secs, 1)),
+            })
+    return jsonify({
+        "timeout_seconds": CONNECTION_IDLE_TIMEOUT,
+        "check_interval_seconds": 60,
+        "open_connections": conns,
+        "total_open": len(conns),
+    })
+
 # ── User management (admin only) ──────────────────────────────────────────
 @login_required
 @app.route("/api/users", methods=["GET", "POST"])
