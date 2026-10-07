@@ -1532,7 +1532,11 @@ def api_history():
 @login_required
 @app.route("/api/history", methods=["DELETE"])
 def api_clear_history():
+    user = get_current_user()
+    if not user or not user.get("admin"):
+        return jsonify({"error": "Admin access required"}), 403
     save_history([])
+    logger.info(f"History cleared by {user['username']}")
     return jsonify({"ok": True})
 
 # ── Saved scripts ────────────────────────────────────────────────────────
