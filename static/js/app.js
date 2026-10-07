@@ -841,23 +841,25 @@ function initColumnDrag() {
             th.style.borderLeft = '';
             if (!dragSrc || th === dragSrc) return;
 
-            // Reorder columns
+            // Reorder columns — works for both main results and Query Builder
             const fromIdx = parseInt(dragSrc.dataset.colIdx);
             const toIdx = parseInt(th.dataset.colIdx);
 
-            const s = resultsState;
-            if (!s.colOrder) {
-                s.colOrder = s.columns.map((_, i) => i);
+            // If resultsState is available (main editor), reorder via colOrder
+            if (resultsState && resultsState.columns) {
+                const s = resultsState;
+                if (!s.colOrder) {
+                    s.colOrder = s.columns.map((_, i) => i);
+                }
+                const moved = s.colOrder.indexOf(fromIdx);
+                const target = s.colOrder.indexOf(toIdx);
+                s.colOrder.splice(moved, 1);
+                s.colOrder.splice(target, 0, fromIdx);
+                renderResultsPage();
+            } else {
+                // Query Builder or standalone table — reorder DOM directly
+                reorderTableColumns(fromIdx, toIdx);
             }
-
-            // Move the dragged column to the target position
-            const moved = s.colOrder.indexOf(fromIdx);
-            const target = s.colOrder.indexOf(toIdx);
-            s.colOrder.splice(moved, 1);
-            s.colOrder.splice(target, 0, fromIdx);
-
-            // Re-render
-            renderResultsPage();
         });
 
         // Click to sort — but only if no drag happened
@@ -866,6 +868,37 @@ function initColumnDrag() {
             const colIdx = parseInt(th.dataset.colIdx);
             sortTable(th, colIdx);
         });
+    });
+}
+
+function reorderTableColumns(fromIdx, toIdx) {
+    const table = document.querySelector('.results-table');
+    if (!table) return;
+    const theadRow = table.querySelector('thead tr');
+    const tbody = table.querySelector('tbody');
+    if (!theadRow || !tbody) return;
+
+    // Reorder header cells
+    const ths = Array.from(theadRow.children);
+    if (fromIdx < 0 || fromIdx >= ths.length || toIdx < 0 || toIdx >= ths.length) return;
+    const movedTh = ths.splice(fromIdx, 1)[0];
+    ths.splice(toIdx, 0, movedTh);
+    theadRow.innerHTML = '';
+    ths.forEach(th => theadRow.appendChild(th));
+
+    // Reorder body cells in each row
+    tbody.querySelectorAll('tr').forEach(tr => {
+        const tds = Array.from(tr.children);
+        if (fromIdx >= tds.length) return;
+        const movedTd = tds.splice(fromIdx, 1)[0];
+        tds.splice(Math.min(toIdx, tds.length), 0, movedTd);
+        tr.innerHTML = '';
+        tds.forEach(td => tr.appendChild(td));
+    });
+
+    // Update data-col-idx attributes
+    Array.from(theadRow.children).forEach((th, i) => {
+        th.dataset.colIdx = i;
     });
 }
 
@@ -1079,6 +1112,7 @@ async function runMultiQuery() {
                 </div>
                 <button class="btn btn-small" style="margin-top:8px" onclick="exportMultiCsv(${JSON.stringify(res).replace(/"/g, '&quot;')})">⬇ Export CSV</button>
             `;
+            initColumnDrag();
         } else if (res.errors && res.errors.length > 0) {
             resDiv.innerHTML = `<div class="error-msg">${res.errors.map(e => esc(e)).join('<br>')}</div>`;
         } else {
@@ -2425,7 +2459,7 @@ function renderQbResults(res, container) {
     }
     let html = `<div style="margin:8px 0;font-size:12px;color:var(--text-dim)">${rows.length} rows · ${res.elapsed || 0}s</div>`;
     html += '<div class="results-table-wrap"><table class="results-table"><thead><tr>';
-    cols.forEach(c => html += `<th>${esc(c)}</th>`);
+    cols.forEach((c, i) => html += `<th draggable="true" data-col-idx="${i}">${esc(c)}</th>`);
     html += '</tr></thead><tbody>';
     rows.forEach(row => {
         html += '<tr>';
@@ -2437,4 +2471,6 @@ function renderQbResults(res, container) {
     });
     html += '</tbody></table></div>';
     container.innerHTML = html;
+    // Enable column drag-and-drop reordering
+    initColumnDrag();
 }
