@@ -121,7 +121,7 @@ def login_required(f):
     return decorated
 
 # ── Connection idle timeout ───────────────────────────────────────────────
-CONNECTION_IDLE_TIMEOUT = 300  # 5 minutes — drop idle connections
+CONNECTION_IDLE_TIMEOUT = 60  # 1 minute — drop idle connections
 _connection_last_used = {}  # (server_id, db_path) -> timestamp
 
 def touch_connection(key):

@@ -74,11 +74,11 @@
         <div class="tab active" data-tab="editor" onclick="switchTab('editor')">Query Editor</div>
         <div class="tab" data-tab="history" onclick="switchTab('history')">History</div>
         <div class="tab" data-tab="scripts" onclick="switchTab('scripts')">Saved Scripts</div>
-        <div class="tab" data-tab="builder" onclick="switchTab('builder')">🧙 Query Builder</div>
+        <div class="tab" data-tab="builder" onclick="switchTab('builder')">🛠 Query Builder</div>
         <div class="tab tab-tools" onclick="toggleToolsMenu(event)">🔧 Tools ▾</div>
-    </div>
-    <div class="tools-dropdown" id="toolsDropdown" style="display:none">
-        <div class="tools-item" onclick="event.stopPropagation(); switchTab('multi'); closeToolsMenu();">⇶ Multi-Server Query (SELECT only)</div>
+        <div class="tools-dropdown" id="toolsDropdown" style="display:none">
+            <div class="tools-item" onclick="event.stopPropagation(); switchTab('multi'); closeToolsMenu();">⇶ Multi-Server Query (SELECT only)</div>
+        </div>
     </div>
 
     <!-- Tab: Query Editor -->
@@ -177,7 +177,7 @@
     <div class="tab-content" id="tab-builder">
         <div class="qb-container">
             <div class="qb-header">
-                <h3>🧙 Query Builder</h3>
+                <h3>🛠 Query Builder</h3>
                 <span class="qb-hint">Build queries visually — no SQL knowledge needed</span>
             </div>
 
@@ -223,12 +223,6 @@
                 <div class="qb-section-title">↕ Sort (ORDER BY)</div>
                 <div id="qbSortList"></div>
                 <button class="btn btn-small btn-secondary" onclick="qbAddSort()">+ Add Sort Column</button>
-            </div>
-
-            <!-- Step 6: Limit -->
-            <div class="qb-section" id="qbLimitSection" style="display:none">
-                <div class="qb-section-title">🔢 Limit</div>
-                <label class="qb-checkbox-line"><input type="checkbox" id="qbEnableLimit" checked> Limit rows to: <input type="number" id="qbLimit" value="100" min="1" max="100000" class="qb-limit-input" oninput="qbUpdatePreview()"></label>
             </div>
 
             <!-- Preview -->
@@ -279,6 +273,16 @@
             <h3>General</h3>
             <label>Max rows (default): <input type="number" id="setMaxRows" class="modal-input" style="width:120px"></label>
             <label>Query timeout (sec): <input type="number" id="setQueryTimeout" class="modal-input" style="width:120px"></label>
+            <h3>Admin Users</h3>
+            <p class="muted" style="font-size:12px;margin-bottom:10px">Users with admin access can see all features. Non-admin users only see theme toggle and logout.</p>
+            <div id="adminUsersList" style="margin-bottom:12px"></div>
+            <div style="display:flex;gap:8px;align-items:center">
+                <input type="text" id="newAdminUser" placeholder="username to add" class="modal-input" style="max-width:200px">
+                <button class="btn btn-small btn-secondary" onclick="addAdminUser()">+ Add Admin</button>
+            </div>
+            <div id="adminAllWarning" style="display:none;margin-top:8px;padding:8px;background:var(--warning);color:#000;border-radius:6px;font-size:12px">
+                ⚠ No admin_users.json found — all users currently have admin access. Click "Add Admin" to create the file and restrict access.
+            </div>
         </div>
         <div class="modal-footer">
             <button class="btn btn-primary" onclick="saveSettings()">Save</button>

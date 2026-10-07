@@ -8,6 +8,8 @@ let state = {
     currentServer: null,
     currentDb: null,
     metadata: [],
+    isAdmin: false,
+    user: null,
     editor: null,
     multiEditor: null,
 };
@@ -182,11 +184,49 @@ async function loadUserInfo() {
         if (res.ok) {
             const data = await res.json();
             if (data.user) {
+                state.user = data.user;
+                state.isAdmin = data.user.admin === true;
                 const el = document.getElementById('userDisplay');
                 if (el) el.textContent = `👤 ${data.user.name || data.user.username}`;
+                applyAdminVisibility();
             }
         }
     } catch (e) {}
+}
+
+function applyAdminVisibility() {
+    const isAdmin = state.isAdmin === true;
+    // Admin-only buttons: Settings, Test Connection, Diagnose, Restart Server
+    const adminIds = ['btnSettings', 'btnTestConn', 'btnDiagnose', 'btnRestart'];
+    // The buttons don't have IDs yet — find them by onclick or text
+    const buttons = document.querySelectorAll('.topbar-right .btn-ghost');
+    buttons.forEach(btn => {
+        const txt = btn.textContent.trim();
+        // Non-admins only see: theme toggle + logout
+        if (isAdmin) {
+            btn.style.display = '';
+        } else {
+            // Hide everything except theme and logout
+            if (!txt.includes('Dark') && !txt.includes('Light') && !txt.includes('Logout')) {
+                btn.style.display = 'none';
+            }
+        }
+    });
+    // Also hide admin-only tabs (Query Builder, Tools)
+    const builderTab = document.querySelector('.tab[data-tab="builder"]');
+    const toolsTab = document.querySelector('.tab-tools');
+    if (builderTab) builderTab.style.display = isAdmin ? '' : 'none';
+    if (toolsTab) toolsTab.style.display = isAdmin ? '' : 'none';
+    // Also hide the Transaction mode controls for non-admins
+    const txToggle = document.getElementById('txModeToggle');
+    if (txToggle) {
+        const txLabel = txToggle.closest('.tx-mode-label');
+        if (txLabel) txLabel.style.display = isAdmin ? '' : 'none';
+    }
+    const btnCommit = document.getElementById('btnCommit');
+    const btnRollback = document.getElementById('btnRollback');
+    if (btnCommit) btnCommit.style.display = isAdmin && state.inTransaction ? '' : 'none';
+    if (btnRollback) btnRollback.style.display = isAdmin && state.inTransaction ? '' : 'none';
 }
 
 async function logout() {
@@ -1333,6 +1373,7 @@ async function openSettings() {
     document.getElementById('setPassword').value = '';
     document.getElementById('setMaxRows').value = c.settings?.max_rows || 1000;
     document.getElementById('setQueryTimeout').value = c.settings?.query_timeout || 30;
+    if (state.isAdmin) loadAdminUsers();
 
     const div = document.getElementById('serversConfig');
     div.innerHTML = c.servers.map((s, i) => `
@@ -1472,6 +1513,72 @@ async function saveSettings() {
 
 function closeSettings() {
     document.getElementById('settingsModal').style.display = 'none';
+}
+
+// ── Admin user management ──────────────────────────────────────
+async function loadAdminUsers() {
+    try {
+        const res = await api('/api/admin-users');
+        if (res.error) return;
+        const listDiv = document.getElementById('adminUsersList');
+        const warningDiv = document.getElementById('adminAllWarning');
+        if (res.all_admins) {
+            warningDiv.style.display = '';
+            listDiv.innerHTML = '<p class="muted" style="font-size:12px">All users have admin access (no restriction file yet)</p>';
+        } else {
+            warningDiv.style.display = 'none';
+            const admins = res.admins || [];
+            if (admins.length === 0) {
+                listDiv.innerHTML = '<p class="muted" style="font-size:12px">No admin users — only you will have access after initializing</p>';
+            } else {
+                listDiv.innerHTML = admins.map(u => `
+                    <div style="display:flex;align-items:center;gap:8px;padding:4px 0">
+                        <span style="flex:1">👤 ${esc(u)}</span>
+                        <button class="btn btn-small btn-danger" onclick="removeAdminUser('${esc(u)}')">✕ Remove</button>
+                    </div>
+                `).join('');
+            }
+        }
+    } catch (e) {
+        console.error('Failed to load admin users:', e);
+    }
+}
+
+async function addAdminUser() {
+    const input = document.getElementById('newAdminUser');
+    const username = input.value.trim();
+    if (!username) return;
+    try {
+        const res = await api('/api/admin-users', {
+            method: 'POST',
+            body: JSON.stringify({ action: 'add', username }),
+        });
+        if (res.ok) {
+            input.value = '';
+            loadAdminUsers();
+        } else if (res.error) {
+            alert('Error: ' + res.error);
+        }
+    } catch (e) {
+        alert('Error: ' + e.message);
+    }
+}
+
+async function removeAdminUser(username) {
+    if (!confirm(`Remove admin access from ${username}?`)) return;
+    try {
+        const res = await api('/api/admin-users', {
+            method: 'POST',
+            body: JSON.stringify({ action: 'remove', username }),
+        });
+        if (res.ok) {
+            loadAdminUsers();
+        } else if (res.error) {
+            alert('Error: ' + res.error);
+        }
+    } catch (e) {
+        alert('Error: ' + e.message);
+    }
 }
 
 async function scanDatabases() {
@@ -1712,8 +1819,6 @@ let qb = {
     aggregates: [],   // [{ fn, column, alias }]
     groupBy: [],      // [{ column }]
     sortColumns: [],  // [{ column, direction }]
-    enableLimit: true,
-    limit: 100,
     enableAgg: false,
 };
 
@@ -1773,7 +1878,6 @@ function qbPrimaryTableChanged() {
         document.getElementById('qbFiltersSection').style.display = '';
         document.getElementById('qbAggSection').style.display = '';
         document.getElementById('qbSortSection').style.display = '';
-        document.getElementById('qbLimitSection').style.display = '';
         document.getElementById('qbAddJoinBtn').style.display = '';
         qbRenderColumns();
         qbRenderJoinList();
@@ -1782,7 +1886,6 @@ function qbPrimaryTableChanged() {
         document.getElementById('qbFiltersSection').style.display = 'none';
         document.getElementById('qbAggSection').style.display = 'none';
         document.getElementById('qbSortSection').style.display = 'none';
-        document.getElementById('qbLimitSection').style.display = 'none';
         document.getElementById('qbAddJoinBtn').style.display = 'none';
         document.getElementById('qbJoinList').innerHTML = '';
     }
@@ -2233,12 +2336,6 @@ function qbGenerateSQL() {
         sql += '\nORDER BY ' + validSort.map(s => `${s.column} ${s.direction}`).join(', ');
     }
 
-    // LIMIT
-    if (qb.enableLimit) {
-        const limitVal = document.getElementById('qbLimit') ? document.getElementById('qbLimit').value : qb.limit;
-        sql += `\n-- Limit: ${limitVal} (applied by app)`;
-    }
-
     return sql;
 }
 
@@ -2259,10 +2356,6 @@ function qbUpdatePreview() {
         preview.textContent = 'Select a table to begin…';
         preview.style.color = 'var(--text-muted)';
     }
-
-    // Update enable limit checkbox
-    const enableLimitCb = document.getElementById('qbEnableLimit');
-    if (enableLimitCb) qb.enableLimit = enableLimitCb.checked;
 
     // Update render of filters and sort
     if (document.getElementById('qbFilterList')) qbRenderFilters();
@@ -2296,7 +2389,7 @@ async function qbRun() {
     resultsDiv.style.display = '';
     resultsDiv.innerHTML = '<p class="muted loading">Running query…</p>';
 
-    const maxRows = qb.enableLimit ? (document.getElementById('qbLimit')?.value || 100) : 1000;
+    const maxRows = 1000;
 
     try {
         const res = await api('/api/query', {
@@ -2313,8 +2406,10 @@ async function qbRun() {
             resultsDiv.innerHTML = `<div class="error-msg">${esc(res.error)}</div>`;
         } else if (res.columns) {
             renderQbResults(res, resultsDiv);
+            loadHistory();
         } else if (res.rows_affected !== undefined) {
             resultsDiv.innerHTML = `<p>${res.rows_affected} rows affected</p>`;
+            loadHistory();
         }
     } catch (e) {
         resultsDiv.innerHTML = `<div class="error-msg">${esc(e.message)}</div>`;
