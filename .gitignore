@@ -2,6 +2,7 @@ __pycache__/
 *.pyc
 saved/history.json
 saved/app.log
+saved/secret_key.dat
 config.json.bak
 config.json
 admin_users.json

@@ -33,13 +33,29 @@ except ImportError:
 
 app = Flask(__name__)
 app.config["JSON_SORT_KEYS"] = False
-app.secret_key = secrets.token_hex(32)
 
 # ── Paths ─────────────────────────────────────────────────────────────────
 BASE_DIR      = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH    = os.path.join(BASE_DIR, "config.json")
 SAVED_DIR      = os.path.join(BASE_DIR, "saved")
 HISTORY_PATH   = os.path.join(BASE_DIR, "saved", "history.json")
+
+# ── Persistent secret key ─────────────────────────────────────────────────
+# Must be persistent across restarts so session cookies stay valid.
+# Stored in saved/secret_key.dat — generated once on first run.
+SECRET_KEY_PATH = os.path.join(SAVED_DIR, "secret_key.dat")
+def _load_or_create_secret_key():
+    try:
+        with open(SECRET_KEY_PATH, "r") as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        key = secrets.token_hex(32)
+        os.makedirs(SAVED_DIR, exist_ok=True)
+        with open(SECRET_KEY_PATH, "w") as f:
+            f.write(key)
+        return key
+
+app.secret_key = _load_or_create_secret_key()
 os.makedirs(SAVED_DIR, exist_ok=True)
 
 # ── Authentication ─────────────────────────────────────────────────────────
