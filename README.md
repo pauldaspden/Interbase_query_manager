@@ -4,9 +4,25 @@ A self-contained, **zero-install** web application for running SQL queries acros
 
 ## Quick Start
 
-1. **Copy the entire `Interbase_query_manager` folder** to your server.
-2. Double-click `start.bat` (or run as a scheduled task for persistent hosting).
-3. Open `http://localhost:5000` in your browser.
+The app runs on **PINTAPPTEST** as a Windows Scheduled Task (managed via Azure Arc). It's available at `http://localhost:5000` on PINTAPPTEST.
+
+### If the app is already installed
+
+Just open `http://localhost:5000` in a browser on PINTAPPTEST. Log in with your Affinity credentials.
+
+### If the app stops or needs restarting
+
+Run this in Azure Cloud Shell:
+```powershell
+$script = 'Start-ScheduledTask -TaskName "InterbaseQueryManager"'
+az connectedmachine run-command create --resource-group rg-onprem-prod --machine-name PINTAPPTEST --run-command-name "iqm-start1" --script $script
+```
+
+### First-time installation
+
+1. Copy the `Interbase_query_manager` folder to `C:\Affinity\Web\Interbase_query_manager\` on PINTAPPTEST
+2. Run `install_service.bat` as administrator (or via Azure Cloud Shell — see `ARCHITECTURE.md`)
+3. Open `http://localhost:5000` in a browser on PINTAPPTEST
 
 **No Python installation required.** A portable Python 3.14 is bundled in the `python/` folder. No `pip install` needed — all dependencies are in `vendor/`.
 
