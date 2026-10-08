@@ -16,6 +16,7 @@ import uuid
 import threading
 import secrets
 import hashlib
+import logging
 from datetime import datetime, date
 from decimal import Decimal
 
@@ -57,6 +58,15 @@ def _load_or_create_secret_key():
 
 app.secret_key = _load_or_create_secret_key()
 os.makedirs(SAVED_DIR, exist_ok=True)
+
+# ── Logging ───────────────────────────────────────────────────────────────
+LOG_PATH = os.path.join(SAVED_DIR, "app.log")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.FileHandler(LOG_PATH, encoding="utf-8")],
+)
+logger = logging.getLogger("iqm")
 
 # ── Authentication ─────────────────────────────────────────────────────────
 # Authentication uses the members_ table in PAYOFFICE.IB on PIDB08.
