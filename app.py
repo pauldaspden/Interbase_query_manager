@@ -1777,15 +1777,11 @@ def api_scan_databases():
         # Map server names to config IDs and add missing databases
         cfg = load_config()
         added = []
-        removed = []
         for srv in cfg["servers"]:
             # Find matching server name from scan results
             for scan_name, db_paths in found.items():
                 if scan_name in srv.get("name", "") or scan_name in srv.get("host", ""):
-                    found_paths_lower = set(p.lower() for p in db_paths)
                     existing_paths_lower = set(db["path"].lower() for db in srv["databases"])
-
-                    # Add new databases
                     for path in db_paths:
                         if path.lower() not in existing_paths_lower:
                             db_name = path.split("\\")[-1].replace(".IB", "").replace(".ib", "")
@@ -1797,14 +1793,7 @@ def api_scan_databases():
                             srv["databases"].append(new_db)
                             added.append(f"{srv['name']}: {db_name}")
 
-                    # Detect removed databases (in config but not on disk)
-                    for db in list(srv["databases"]):
-                        if db["path"].lower() not in found_paths_lower:
-                            removed.append(f"{srv['name']}: {db['name']} ({db['path']})")
-                            if remove_missing:
-                                srv["databases"].remove(db)
-
-        if added or (removed and remove_missing):
+        if added:
             # Re-sort by company_number
             for srv in cfg["servers"]:
                 srv["databases"].sort(
@@ -1814,16 +1803,13 @@ def api_scan_databases():
                 )
             save_config(cfg)
 
-        logger.info(f"Scan by {user['username']}: found={sum(len(v) for v in found.values())} added={len(added)} removed={len(removed)}")
+        logger.info(f"Scan by {user['username']}: found={sum(len(v) for v in found.values())} added={len(added)}")
 
         return jsonify({
             "ok": True,
             "found": sum(len(v) for v in found.values()),
             "added": added,
             "added_count": len(added),
-            "removed": removed,
-            "removed_count": len(removed),
-            "removed_from_config": remove_missing,
         })
     except subprocess.TimeoutExpired:
         return jsonify({"error": "Scanner timed out (120s)"}), 500

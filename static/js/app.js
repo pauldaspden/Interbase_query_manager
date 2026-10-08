@@ -1618,7 +1618,7 @@ async function removeAdminUser(username) {
 }
 
 async function scanDatabases() {
-    if (!confirm('Run DBScanner to discover databases via network shares?\nThis will add new databases and report any that are missing from disk.')) return;
+    if (!confirm('Run DBScanner to discover databases via network shares?\nThis will add any new databases found to the config.')) return;
     closeSettings();
     // Show loading
     const overlay = document.createElement('div');
@@ -1633,34 +1633,10 @@ async function scanDatabases() {
     }
 
     try {
-        const res = await api('/api/scan-databases', { method: 'POST', body: JSON.stringify({ remove_missing: false }) });
+        const res = await api('/api/scan-databases', { method: 'POST' });
         overlay.remove();
         if (res.ok) {
-            let msg = `Scan complete!\n\nFound: ${res.found} databases on disk\nAdded: ${res.added_count} new databases`;
-            if (res.added_count > 0) {
-                msg += '\n\nNew databases:\n' + res.added.join('\n');
-            }
-            if (res.removed_count > 0) {
-                msg += `\n\n⚠ ${res.removed_count} databases in config but NOT found on disk:\n${res.removed.join('\n')}`;
-                msg += '\n\nWould you like to remove these from the config?';
-                if (confirm(msg)) {
-                    // Re-run with remove_missing=true
-                    const overlay2 = document.createElement('div');
-                    overlay2.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:9999;display:flex;align-items:center;justify-content:center;color:#5b9eff;font-size:16px;font-family:sans-serif;';
-                    overlay2.innerHTML = '<div style="text-align:center"><div style="font-size:36px;margin-bottom:10px" class="spin">🧹</div>Removing missing databases from config…</div>';
-                    document.body.appendChild(overlay2);
-                    const res2 = await api('/api/scan-databases', { method: 'POST', body: JSON.stringify({ remove_missing: true }) });
-                    overlay2.remove();
-                    if (res2.ok) {
-                        alert(`Done!\n\nRemoved ${res2.removed_count} databases from config.`);
-                        await loadServers();
-                    } else {
-                        alert('Remove failed: ' + (res2.error || 'Unknown error'));
-                    }
-                }
-            } else {
-                alert(msg);
-            }
+            alert(`Scan complete!\n\nFound: ${res.found} databases\nAdded: ${res.added_count} new databases${res.added_count > 0 ? '\n\n' + res.added.join('\n') : ''}`);
             await loadServers();
         } else {
             alert('Scan failed: ' + (res.error || 'Unknown error'));
