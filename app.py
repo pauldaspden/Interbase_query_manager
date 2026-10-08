@@ -1684,10 +1684,12 @@ import subprocess
 @app.route("/api/scan-databases", methods=["POST"])
 def api_scan_databases():
     """Run DBScanner.ps1 to discover databases via network shares, then
-    update config.json with any new databases found."""
+    update config.json — add new databases and optionally remove missing ones."""
     user = get_current_user()
     if not user or not user.get("admin"):
         return jsonify({"error": "Admin access required"}), 403
+
+    remove_missing = request.get_json().get("remove_missing", False) if request.is_json else False
 
     scanner_path = os.path.join(BASE_DIR, "DBScanner.ps1")
     if not os.path.exists(scanner_path):
@@ -1720,18 +1722,17 @@ def api_scan_databases():
         # Map server names to config IDs and add missing databases
         cfg = load_config()
         added = []
+        removed = []
         for srv in cfg["servers"]:
-            # Extract PIDB name from host or name
-            srv_host = srv["host"]
             # Find matching server name from scan results
             for scan_name, db_paths in found.items():
-                # Match by comparing — we need to check if this server matches
-                # The scan returns PIDB06, PIDB07 etc. The config has host IPs.
-                # We'll match by checking if the server name contains the PIDB name
                 if scan_name in srv.get("name", "") or scan_name in srv.get("host", ""):
-                    existing_paths = set(db["path"].lower() for db in srv["databases"])
+                    found_paths_lower = set(p.lower() for p in db_paths)
+                    existing_paths_lower = set(db["path"].lower() for db in srv["databases"])
+
+                    # Add new databases
                     for path in db_paths:
-                        if path.lower() not in existing_paths:
+                        if path.lower() not in existing_paths_lower:
                             db_name = path.split("\\")[-1].replace(".IB", "").replace(".ib", "")
                             new_db = {
                                 "name": db_name,
@@ -1741,7 +1742,14 @@ def api_scan_databases():
                             srv["databases"].append(new_db)
                             added.append(f"{srv['name']}: {db_name}")
 
-        if added:
+                    # Detect removed databases (in config but not on disk)
+                    for db in list(srv["databases"]):
+                        if db["path"].lower() not in found_paths_lower:
+                            removed.append(f"{srv['name']}: {db['name']} ({db['path']})")
+                            if remove_missing:
+                                srv["databases"].remove(db)
+
+        if added or (removed and remove_missing):
             # Re-sort by company_number
             for srv in cfg["servers"]:
                 srv["databases"].sort(
@@ -1751,11 +1759,16 @@ def api_scan_databases():
                 )
             save_config(cfg)
 
+        logger.info(f"Scan by {user['username']}: found={sum(len(v) for v in found.values())} added={len(added)} removed={len(removed)}")
+
         return jsonify({
             "ok": True,
             "found": sum(len(v) for v in found.values()),
             "added": added,
             "added_count": len(added),
+            "removed": removed,
+            "removed_count": len(removed),
+            "removed_from_config": remove_missing,
         })
     except subprocess.TimeoutExpired:
         return jsonify({"error": "Scanner timed out (120s)"}), 500
