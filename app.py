@@ -1488,11 +1488,28 @@ def api_multi_query():
         dpath = tgt["db_path"]
         try:
             server = next((s for s in cfg["servers"] if s["id"] == sid), None)
-            server_name = server["name"] if server else sid
-            db_name = dpath.split("\\")[-1] if "\\" in dpath else dpath
+            # Build the full path label: e.g. PIDB06:E:\DATABASES\1101\1101.IB
+            # Extract PIDB name from the server name (e.g. "Production Server 6 (PIDB06)" -> "PIDB06")
+            srv_name = server["name"] if server else sid
+            import re as _re2
+            pidb_match = _re2.search(r'(PIDB\d+)', srv_name)
+            pidb_name = pidb_match.group(1) if pidb_match else srv_name
+            full_path = f"{pidb_name}:{dpath}"
+            # Find company number from config
+            company_no = ""
+            if server:
+                for db in server.get("databases", []):
+                    if db["path"].lower() == dpath.lower():
+                        company_no = str(db.get("company_number", "") or "")
+                        break
+            # Fallback: derive from filename if no company number
+            if not company_no:
+                fname = dpath.split("\\")[-1].replace(".IB", "").replace(".ib", "")
+                if fname.isdigit():
+                    company_no = fname
         except Exception:
-            server_name = sid
-            db_name = dpath
+            full_path = f"{sid}:{dpath}"
+            company_no = ""
 
         try:
             conn = cm.get(sid, dpath, creds["username"], creds["password"])
@@ -1505,26 +1522,26 @@ def api_multi_query():
                 total_rows += len(rows)
 
                 if combine:
-                    # Add server/db columns and combine into single result
+                    # Add path/company columns and combine into single result
                     if all_columns is None:
-                        all_columns = ["_SERVER", "_DATABASE"] + cols
+                        all_columns = ["_DB_PATH", "_COMPANY_NO"] + cols
                     for row in rows:
                         safe_row = fast_row_to_json(row)
-                        all_rows.append([server_name, db_name] + safe_row)
+                        all_rows.append([full_path, company_no] + safe_row)
                 else:
                     # Separate results (legacy mode)
                     if not hasattr(api_multi_query, '_separate'):
                         api_multi_query._separate = []
                     api_multi_query._separate.append({
-                        "server_id": sid, "server_name": server_name,
-                        "db_name": db_name, "ok": True, "type": "SELECT",
+                        "server_id": sid, "server_name": full_path,
+                        "db_name": company_no, "ok": True, "type": "SELECT",
                         "columns": cols, "rows": rows_to_json(rows),
                         "row_count": len(rows),
                         "truncated": len(rows) >= max_rows,
                     })
             cur.close()
         except Exception as e:
-            errors.append(f"{server_name} / {db_name}: {e}")
+            errors.append(f"{full_path}: {e}")
 
     elapsed = round(time.time() - t0, 3)
 

@@ -1093,7 +1093,7 @@ async function runMultiQuery() {
             resDiv.innerHTML = `<div class="error-msg" style="margin-top:12px">${esc(res.error)}</div>`;
             return;
         }
-        // Render combined single result set with _SERVER and _DATABASE columns
+        // Render combined single result set with _DB_PATH and _COMPANY_NO columns
         if (res.columns && res.columns.length > 0) {
             resDiv.innerHTML = `
                 <div class="results-header">
