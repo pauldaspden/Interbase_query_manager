@@ -1576,6 +1576,13 @@ def api_multi_query():
 
     elapsed = round(time.time() - t0, 3)
 
+    # Record in history
+    add_history({
+        "sql": sql, "server_id": "multi", "db_path": f"{len(targets)} databases",
+        "row_count": len(all_rows) if combine else total_rows,
+        "elapsed": elapsed, "type": "MULTI-SELECT",
+    })
+
     if combine and all_columns is not None:
         return jsonify({
             "columns": all_columns,
