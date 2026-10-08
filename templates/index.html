@@ -125,6 +125,10 @@
                 <div class="multi-toolbar">
                     <button class="btn btn-primary btn-small" onclick="runMultiQuery()">▶ Run (F6)</button>
                     <span class="multi-selected-count" id="multiSelectedCount">0 databases selected</span>
+                    <label class="tx-mode-label" style="margin-left:auto">
+                        <input type="checkbox" id="multiHideEmpty" checked>
+                        <span>Hide zero-row results</span>
+                    </label>
                 </div>
                 <div class="editor-wrap">
                     <textarea id="multiSqlEditor"></textarea>

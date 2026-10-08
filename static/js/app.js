@@ -1087,7 +1087,7 @@ async function runMultiQuery() {
     try {
         const res = await api('/api/multi-query', {
             method: 'POST',
-            body: JSON.stringify({ targets, sql, max_rows: maxRows, combine: true }),
+            body: JSON.stringify({ targets, sql, max_rows: maxRows, combine: true, hide_empty: document.getElementById('multiHideEmpty').checked }),
         });
         if (res.error) {
             resDiv.innerHTML = `<div class="error-msg" style="margin-top:12px">${esc(res.error)}</div>`;

@@ -1475,6 +1475,7 @@ def api_multi_query():
     sql      = data.get("sql", "").strip()
     max_rows = data.get("max_rows", 500)
     combine  = data.get("combine", True)  # single result set with server/db columns
+    hide_empty = data.get("hide_empty", False)  # skip databases with 0 rows
 
     if not sql:
         return jsonify({"error": "No SQL provided"}), 400
@@ -1538,6 +1539,10 @@ def api_multi_query():
                 total_rows += len(rows)
 
                 if combine:
+                    # Skip databases with 0 rows if hide_empty is set
+                    if hide_empty and len(rows) == 0:
+                        cur.close()
+                        continue
                     # Add path/company columns and combine into single result
                     if all_columns is None:
                         all_columns = ["_DB_PATH", "_COMPANY_NO"] + cols
