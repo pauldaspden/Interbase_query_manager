@@ -40,6 +40,7 @@ BASE_DIR      = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH    = os.path.join(BASE_DIR, "config.json")
 SAVED_DIR      = os.path.join(BASE_DIR, "saved")
 HISTORY_PATH   = os.path.join(BASE_DIR, "saved", "history.json")
+ADMIN_USERS_PATH = os.path.join(BASE_DIR, "admin_users.json")
 
 # ── Persistent secret key ─────────────────────────────────────────────────
 # Must be persistent across restarts so session cookies stay valid.
@@ -96,6 +97,29 @@ def _hash_passwd(password):
     The column is 32 hex chars = MD5 hash."""
     return _hashlib.md5(password.encode("utf-8")).hexdigest()
 
+def _load_admin_users():
+    """Load the list of admin usernames from admin_users.json.
+    Returns a list of usernames (uppercased). If the file doesn't exist,
+    all users are treated as admins (backwards compatible)."""
+    try:
+        with open(ADMIN_USERS_PATH, "r") as f:
+            data = json.load(f)
+            return [u.upper().strip() for u in data.get("admins", [])]
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+
+def _save_admin_users(admins):
+    """Save the list of admin usernames to admin_users.json."""
+    with open(ADMIN_USERS_PATH, "w") as f:
+        json.dump({"admins": admins}, f, indent=4)
+
+def _is_admin(username):
+    """Check if a username is in the admin list."""
+    admins = _load_admin_users()
+    if admins is None:
+        return True  # No admin_users.json — all users are admins
+    return username.upper().strip() in admins
+
 def check_login(username, password):
     """Authenticate against the members_ table in PAYOFFICE.IB on PIDB08."""
     if firebirdsql is None:
@@ -125,7 +149,7 @@ def check_login(username, password):
             return {
                 "username": db_username,
                 "name": db_username,
-                "admin": True,
+                "admin": _is_admin(db_username),
             }
     return None
 
@@ -666,7 +690,7 @@ def api_users():
             users = []
             for row in cur.fetchall():
                 uname = row[0].strip() if isinstance(row[0], str) else str(row[0])
-                users.append({"username": uname, "name": uname, "admin": True})
+                users.append({"username": uname, "name": uname, "admin": _is_admin(uname)})
             cur.close()
             return jsonify(users)
         except Exception as e:
@@ -729,6 +753,55 @@ def api_users():
             return jsonify({"ok": True})
         except Exception as e:
             return jsonify({"error": str(e)}), 500
+
+    return jsonify({"error": "Unknown action"}), 400
+
+# ── Admin user management ─────────────────────────────────────────────────
+@login_required
+@app.route("/api/admin-users", methods=["GET", "POST"])
+def api_admin_users():
+    """Get or update the list of admin users."""
+    user = get_current_user()
+    if not user or not user.get("admin"):
+        return jsonify({"error": "Admin access required"}), 403
+
+    if request.method == "GET":
+        admin_list = _load_admin_users()
+        if admin_list is None:
+            return jsonify({"admins": [], "all_admins": True})
+        return jsonify({"admins": admin_list, "all_admins": False})
+
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No JSON body"}), 400
+    action = data.get("action")
+
+    if action == "add":
+        username = (data.get("username") or "").strip().upper()
+        if not username:
+            return jsonify({"error": "Username required"}), 400
+        admin_list = _load_admin_users()
+        if admin_list is None:
+            admin_list = []
+        if username not in admin_list:
+            admin_list.append(username)
+            _save_admin_users(admin_list)
+        return jsonify({"ok": True, "admins": admin_list})
+
+    if action == "remove":
+        username = (data.get("username") or "").strip().upper()
+        admin_list = _load_admin_users()
+        if admin_list is None:
+            admin_list = []
+        if username in admin_list:
+            admin_list.remove(username)
+            _save_admin_users(admin_list)
+        return jsonify({"ok": True, "admins": admin_list})
+
+    if action == "init":
+        admin_list = [user["username"].upper().strip()]
+        _save_admin_users(admin_list)
+        return jsonify({"ok": True, "admins": admin_list})
 
     return jsonify({"error": "Unknown action"}), 400
 
@@ -1744,8 +1817,7 @@ def api_scan_databases():
     if not user or not user.get("admin"):
         return jsonify({"error": "Admin access required"}), 403
 
-    remove_missing = request.get_json().get("remove_missing", False) if request.is_json else False
-
+    # Scan is add-only — no remove_missing parameter needed
     scanner_path = os.path.join(BASE_DIR, "DBScanner.ps1")
     if not os.path.exists(scanner_path):
         return jsonify({"error": "DBScanner.ps1 not found"}), 404
